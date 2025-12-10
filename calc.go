@@ -538,6 +538,7 @@ type formulaFuncs struct {
 //	FDIST
 //	FIND
 //	FINDB
+//	FILTER
 //	FINV
 //	FISHER
 //	FISHERINV
@@ -8161,6 +8162,245 @@ func (fn *formulaFuncs) DEVSQ(argsList *list.List) formulaArg {
 	return newNumberFormulaArg(result)
 }
 
+// coerceToBoolean coerces a formula argument to a boolean value.
+// Returns true, false, or an error if the value cannot be coerced.
+// This follows Excel/HyperFormula behavior:
+// - Boolean values are returned as-is
+// - Empty values return false
+// - Numbers return true if non-zero, false if zero
+// - Strings "TRUE"/"FALSE" (case-insensitive) return corresponding boolean
+// - Empty strings return false
+// - Other strings return an error
+func coerceToBoolean(arg formulaArg) (bool, *formulaArg) {
+	switch arg.Type {
+	case ArgError:
+		return false, &arg
+	case ArgEmpty:
+		return false, nil
+	case ArgNumber:
+		return arg.Number != 0, nil
+	case ArgString:
+		upper := strings.ToUpper(arg.String)
+		if upper == "TRUE" {
+			return true, nil
+		}
+		if upper == "FALSE" || upper == "" {
+			return false, nil
+		}
+		// Non-boolean strings are treated as false in filter context
+		return false, nil
+	default:
+		return false, nil
+	}
+}
+
+// getMatrixDimensions returns the rows and columns count for a formula argument.
+// For Matrix type, returns actual dimensions. For List type with cellRanges,
+// calculates from range boundaries.
+func getMatrixDimensions(arg formulaArg) (rows, cols int) {
+	if arg.Type == ArgMatrix {
+		rows = len(arg.Matrix)
+		if rows > 0 {
+			cols = len(arg.Matrix[0])
+		}
+		return
+	}
+	// For range-based arguments, calculate from cellRanges
+	if arg.cellRanges != nil && arg.cellRanges.Len() > 0 {
+		cr := arg.cellRanges.Front().Value.(cellRange)
+		rows = cr.To.Row - cr.From.Row + 1
+		cols = cr.To.Col - cr.From.Col + 1
+		return
+	}
+	// For single cell refs
+	if arg.cellRefs != nil && arg.cellRefs.Len() > 0 {
+		return 1, 1
+	}
+	// For scalar values
+	return 1, 1
+}
+
+// FILTER function filters a range of data based on criteria you define.
+// The syntax of the function is:
+//
+//	FILTER(array,include,[if_empty])
+func (fn *formulaFuncs) FILTER(argsList *list.List) formulaArg {
+	argc := argsList.Len()
+	if argc < 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "FILTER requires at least 2 arguments")
+	}
+	if argc > 3 {
+		return newErrorFormulaArg(formulaErrorVALUE, "FILTER requires at most 3 arguments")
+	}
+
+	// Get array argument
+	arrayArg := argsList.Front().Value.(formulaArg)
+	if arrayArg.Type == ArgError {
+		return arrayArg
+	}
+
+	// Get include argument
+	includeArg := argsList.Front().Next().Value.(formulaArg)
+	if includeArg.Type == ArgError {
+		return includeArg
+	}
+
+	// Get optional if_empty argument
+	var ifEmptyArg *formulaArg
+	if argc == 3 {
+		arg := argsList.Back().Value.(formulaArg)
+		ifEmptyArg = &arg
+	}
+
+	// Convert to matrix if needed
+	var arrayMatrix, includeMatrix [][]formulaArg
+	arrayRows, arrayCols := getMatrixDimensions(arrayArg)
+	includeRows, includeCols := getMatrixDimensions(includeArg)
+
+	// Validate dimensions match
+	if arrayRows != includeRows || arrayCols != includeCols {
+		return newErrorFormulaArg(formulaErrorNA, "FILTER has mismatched array sizes")
+	}
+
+	// Get matrices
+	if arrayArg.Type == ArgMatrix {
+		arrayMatrix = arrayArg.Matrix
+	} else {
+		// Convert list to matrix
+		list := arrayArg.ToList()
+		arrayMatrix = make([][]formulaArg, arrayRows)
+		for i := 0; i < arrayRows; i++ {
+			arrayMatrix[i] = make([]formulaArg, arrayCols)
+			for j := 0; j < arrayCols; j++ {
+				idx := i*arrayCols + j
+				if idx < len(list) {
+					arrayMatrix[i][j] = list[idx]
+				} else {
+					arrayMatrix[i][j] = newEmptyFormulaArg()
+				}
+			}
+		}
+	}
+
+	if includeArg.Type == ArgMatrix {
+		includeMatrix = includeArg.Matrix
+	} else {
+		// Convert list to matrix
+		list := includeArg.ToList()
+		includeMatrix = make([][]formulaArg, includeRows)
+		for i := 0; i < includeRows; i++ {
+			includeMatrix[i] = make([]formulaArg, includeCols)
+			for j := 0; j < includeCols; j++ {
+				idx := i*includeCols + j
+				if idx < len(list) {
+					includeMatrix[i][j] = list[idx]
+				} else {
+					includeMatrix[i][j] = newEmptyFormulaArg()
+				}
+			}
+		}
+	}
+
+	// Determine filter direction based on dimensions
+	// If array is a single row, filter columns; if single column, filter rows
+	// If both dimensions > 1, return error (per HyperFormula behavior)
+	isHorizontal := arrayRows == 1 && arrayCols > 1
+	isVertical := arrayCols == 1 && arrayRows > 1
+
+	if arrayRows > 1 && arrayCols > 1 {
+		// 2D array: filter rows based on include array
+		// In Excel, FILTER with 2D arrays filters rows when include is a column vector
+		// and filters columns when include is a row vector
+		if includeCols == 1 && includeRows == arrayRows {
+			isVertical = true
+		} else if includeRows == 1 && includeCols == arrayCols {
+			isHorizontal = true
+		} else {
+			return newErrorFormulaArg(formulaErrorNA, "FILTER has mismatched array dimensions")
+		}
+	}
+
+	var result [][]formulaArg
+
+	if isVertical || (arrayRows > 1 && arrayCols > 1 && includeCols == 1) {
+		// Filter rows (vertical array or 2D with column include)
+		for i := 0; i < arrayRows; i++ {
+			includeVal := includeMatrix[i][0]
+			ok, errArg := coerceToBoolean(includeVal)
+			if errArg != nil {
+				return *errArg
+			}
+			if ok {
+				result = append(result, arrayMatrix[i])
+			}
+		}
+	} else if isHorizontal || (arrayRows > 1 && arrayCols > 1 && includeRows == 1) {
+		// Filter columns (horizontal array or 2D with row include)
+		// For horizontal filtering, we need to build result differently
+		if arrayRows == 1 {
+			// Single row case
+			var row []formulaArg
+			for j := 0; j < arrayCols; j++ {
+				includeVal := includeMatrix[0][j]
+				ok, errArg := coerceToBoolean(includeVal)
+				if errArg != nil {
+					return *errArg
+				}
+				if ok {
+					row = append(row, arrayMatrix[0][j])
+				}
+			}
+			if len(row) > 0 {
+				result = append(result, row)
+			}
+		} else {
+			// 2D array with row include - filter columns
+			var filteredCols []int
+			for j := 0; j < arrayCols; j++ {
+				includeVal := includeMatrix[0][j]
+				ok, errArg := coerceToBoolean(includeVal)
+				if errArg != nil {
+					return *errArg
+				}
+				if ok {
+					filteredCols = append(filteredCols, j)
+				}
+			}
+			if len(filteredCols) > 0 {
+				for i := 0; i < arrayRows; i++ {
+					var row []formulaArg
+					for _, j := range filteredCols {
+						row = append(row, arrayMatrix[i][j])
+					}
+					result = append(result, row)
+				}
+			}
+		}
+	} else {
+		// Single cell case
+		if len(arrayMatrix) > 0 && len(arrayMatrix[0]) > 0 {
+			includeVal := includeMatrix[0][0]
+			ok, errArg := coerceToBoolean(includeVal)
+			if errArg != nil {
+				return *errArg
+			}
+			if ok {
+				result = append(result, []formulaArg{arrayMatrix[0][0]})
+			}
+		}
+	}
+
+	// Check if result is empty
+	if len(result) == 0 {
+		if ifEmptyArg != nil {
+			return *ifEmptyArg
+		}
+		return newErrorFormulaArg(formulaErrorCALC, "FILTER returned no results")
+	}
+
+	return newMatrixFormulaArg(result)
+}
+
 // FISHER function calculates the Fisher Transformation for a supplied value.
 // The syntax of the function is:
 //
@@ -15599,13 +15839,13 @@ func lookupHashSearch(vertical bool, lookupValue, lookupArray formulaArg) (int, 
 				if lookupIsNumber {
 					// Convert cell to number for comparison
 					if numCell := cell.ToNumber(); numCell.Type == ArgNumber {
-						key = "N:" + numCell.Value()  // Number key
+						key = "N:" + numCell.Value() // Number key
 					} else {
-						continue  // Skip non-numeric cells when looking for numbers
+						continue // Skip non-numeric cells when looking for numbers
 					}
 				} else {
 					// Use string comparison
-					key = "S:" + cell.Value()  // String key
+					key = "S:" + cell.Value() // String key
 				}
 
 				if _, exists := hashIndex[key]; !exists {

@@ -5266,6 +5266,201 @@ func TestGetFormulaUniqueArgs(t *testing.T) {
 	assert.Equal(t, formulaErrorNAME, err.Error)
 }
 
+func TestCalcFILTER(t *testing.T) {
+	// Test case 1: Filter vertical range with boolean conditions
+	cellData := [][]interface{}{
+		{nil, 1, true},
+		{nil, 2, false},
+		{nil, 3, true},
+	}
+	f := prepareCalcData(cellData)
+
+	// Filter vertical range - should return 1 and 3 (where C is TRUE)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "FILTER(B1:B3,C1:C3)"))
+	result, err := f.CalcCellValue("Sheet1", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "1", result)
+
+	// Test case 2: Filter horizontal range
+	cellData = [][]interface{}{
+		{nil, nil, nil},
+		{1, 2, 3},
+		{true, false, true},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "FILTER(A2:C2,A3:C3)"))
+	result, err = f.CalcCellValue("Sheet1", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "1", result) // First element of filtered result
+
+	// Test case 3: Filter with numeric conditions (non-zero = true)
+	cellData = [][]interface{}{
+		{"A", 1},
+		{"B", 0},
+		{"C", 1},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:A3,B1:B3)"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.NoError(t, err)
+	assert.Equal(t, "A", result)
+
+	// Test case 4: Filter with string TRUE/FALSE conditions
+	cellData = [][]interface{}{
+		{10, "TRUE"},
+		{20, "FALSE"},
+		{30, "TRUE"},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:A3,B1:B3)"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.NoError(t, err)
+	assert.Equal(t, "10", result)
+
+	// Test case 5: FILTER with TEXTJOIN to see full result
+	cellData = [][]interface{}{
+		{"Apple", true},
+		{"Banana", false},
+		{"Cherry", true},
+		{"Date", true},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "TEXTJOIN(\",\",TRUE,FILTER(A1:A4,B1:B4))"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Apple,Cherry,Date", result)
+
+	// Test case 6: 2D array filter (filter rows based on column condition)
+	cellData = [][]interface{}{
+		{"a", 1, 42},
+		{"b", 2, 42},
+		{"a", 3, 42},
+		{"b", 4, 42},
+	}
+	f = prepareCalcData(cellData)
+	// Create a filter condition based on column A = "a"
+	assert.NoError(t, f.SetCellValue("Sheet1", "E1", true))
+	assert.NoError(t, f.SetCellValue("Sheet1", "E2", false))
+	assert.NoError(t, f.SetCellValue("Sheet1", "E3", true))
+	assert.NoError(t, f.SetCellValue("Sheet1", "E4", false))
+	assert.NoError(t, f.SetCellFormula("Sheet1", "G1", "TEXTJOIN(\",\",TRUE,FILTER(B1:B4,E1:E4))"))
+	result, err = f.CalcCellValue("Sheet1", "G1")
+	assert.NoError(t, err)
+	assert.Equal(t, "1,3", result)
+}
+
+func TestCalcFILTERErrors(t *testing.T) {
+	// Test error cases
+	cellData := [][]interface{}{
+		{1, 2, 3},
+		{true, false, true},
+	}
+	f := prepareCalcData(cellData)
+
+	// Test case 1: Too few arguments
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:C1)"))
+	result, err := f.CalcCellValue("Sheet1", "D1")
+	assert.Error(t, err)
+	assert.Equal(t, "#VALUE!", result)
+
+	// Test case 2: Too many arguments
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:C1,A2:C2,1,2)"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.Error(t, err)
+	assert.Equal(t, "#VALUE!", result)
+
+	// Test case 3: Mismatched array sizes
+	cellData = [][]interface{}{
+		{1, 2, 3},
+		{true, false},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:C1,A2:B2)"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.Error(t, err)
+	assert.Equal(t, "#N/A", result)
+
+	// Test case 4: No results with if_empty
+	cellData = [][]interface{}{
+		{1, 2, 3},
+		{false, false, false},
+	}
+	f = prepareCalcData(cellData)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:C1,A2:C2,\"No results\")"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.NoError(t, err)
+	assert.Equal(t, "No results", result)
+
+	// Test case 5: No results without if_empty (should return #CALC!)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "FILTER(A1:C1,A2:C2)"))
+	result, err = f.CalcCellValue("Sheet1", "D1")
+	assert.Error(t, err)
+	assert.Equal(t, "#CALC!", result)
+}
+
+func TestCalcFILTERWithExpression(t *testing.T) {
+	// Test FILTER with comparison expression in include parameter
+	cellData := [][]interface{}{
+		{"Product", "Sales"},
+		{"Apple", 100},
+		{"Banana", 50},
+		{"Cherry", 150},
+		{"Date", 80},
+	}
+	f := prepareCalcData(cellData)
+
+	// Filter products with sales > 75
+	// Note: This tests that FILTER works with expression results
+	assert.NoError(t, f.SetCellValue("Sheet1", "D2", true))  // 100 > 75
+	assert.NoError(t, f.SetCellValue("Sheet1", "D3", false)) // 50 > 75
+	assert.NoError(t, f.SetCellValue("Sheet1", "D4", true))  // 150 > 75
+	assert.NoError(t, f.SetCellValue("Sheet1", "D5", true))  // 80 > 75
+	assert.NoError(t, f.SetCellFormula("Sheet1", "E1", "TEXTJOIN(\",\",TRUE,FILTER(A2:A5,D2:D5))"))
+	result, err := f.CalcCellValue("Sheet1", "E1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Apple,Cherry,Date", result)
+}
+
+func TestCoerceToBoolean(t *testing.T) {
+	// Test coerceToBoolean helper function
+	tests := []struct {
+		name     string
+		arg      formulaArg
+		expected bool
+		hasError bool
+	}{
+		{"true boolean", newBoolFormulaArg(true), true, false},
+		{"false boolean", newBoolFormulaArg(false), false, false},
+		{"non-zero number", newNumberFormulaArg(1), true, false},
+		{"zero number", newNumberFormulaArg(0), false, false},
+		{"negative number", newNumberFormulaArg(-5), true, false},
+		{"TRUE string", newStringFormulaArg("TRUE"), true, false},
+		{"true string lowercase", newStringFormulaArg("true"), true, false},
+		{"FALSE string", newStringFormulaArg("FALSE"), false, false},
+		{"empty string", newStringFormulaArg(""), false, false},
+		{"other string", newStringFormulaArg("hello"), false, false},
+		{"empty arg", newEmptyFormulaArg(), false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, errArg := coerceToBoolean(tt.arg)
+			if tt.hasError {
+				assert.NotNil(t, errArg)
+			} else {
+				assert.Nil(t, errArg)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+
+	// Test error propagation
+	errArg := newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	_, resultErr := coerceToBoolean(errArg)
+	assert.NotNil(t, resultErr)
+	assert.Equal(t, ArgError, resultErr.Type)
+}
+
 func TestCalcDatabase(t *testing.T) {
 	cellData := [][]interface{}{
 		{"Tree", "Height", "Age", "Yield", "Profit", "Height"},
