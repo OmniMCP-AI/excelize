@@ -63,7 +63,8 @@ func (f *File) GetRows(sheet string, opts ...Options) ([][]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	results, cur, maxVal := make([][]string, 0, 64), 0, 0
+	// 优化：使用更大的初始容量（1024 而不是 64）来减少大文件的内存重分配
+	results, cur, maxVal := make([][]string, 0, 1024), 0, 0
 	for rows.Next() {
 		cur++
 		row, err := rows.Columns(opts...)
@@ -157,8 +158,11 @@ func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 	var rowIterator rowXMLIterator
 	var token xml.Token
 	rows.rawCellValue = rows.f.getOptions(opts...).RawCellValue
-	if rows.sst, rowIterator.err = rows.f.sharedStringsReader(); rowIterator.err != nil {
-		return rowIterator.cells, rowIterator.err
+	// 优化：如果 sst 已经初始化，跳过 sharedStringsReader 调用（避免重复的 mutex 锁）
+	if rows.sst == nil {
+		if rows.sst, rowIterator.err = rows.f.sharedStringsReader(); rowIterator.err != nil {
+			return rowIterator.cells, rowIterator.err
+		}
 	}
 	for {
 		if rows.token != nil {
@@ -344,6 +348,8 @@ func (f *File) Rows(sheet string) (*Rows, error) {
 	var err error
 	rows := Rows{f: f, sheet: name}
 	rows.needClose, rows.decoder, rows.tempFile, err = f.xmlDecoder(name)
+	// 优化：一次性初始化 sharedStrings，避免每行都获取 mutex 锁
+	rows.sst, _ = f.sharedStringsReader()
 	return &rows, err
 }
 
