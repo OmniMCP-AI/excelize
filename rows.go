@@ -82,6 +82,52 @@ func (f *File) GetRows(sheet string, opts ...Options) ([][]string, error) {
 	return results[:maxVal], rows.Close()
 }
 
+// GetFormulas return all the formulas in a sheet by given worksheet name, returned as
+// a two-dimensional array. Each cell that contains a formula will show its formula string,
+// cells without formulas will be empty strings. GetFormulas fetched the rows with formula
+// cells, the continually blank cells in the tail of each row will be skipped, so the length
+// of each row may be inconsistent.
+//
+// For example, get and traverse the formulas of all cells by rows on a worksheet
+// named 'Sheet1':
+//
+//	formulas, err := f.GetFormulas("Sheet1")
+//	if err != nil {
+//	    fmt.Println(err)
+//	    return
+//	}
+//	for rowIndex, row := range formulas {
+//	    for colIndex, formula := range row {
+//	        if formula != "" {
+//	            fmt.Printf("Cell %s has formula: %s\n",
+//	                excelize.CoordinatesToCellName(colIndex+1, rowIndex+1), formula)
+//	        }
+//	    }
+//	}
+func (f *File) GetFormulas(sheet string) ([][]string, error) {
+	rows, err := f.Rows(sheet)
+	if err != nil {
+		return nil, err
+	}
+	// 使用相同的初始容量优化
+	results, cur, maxVal := make([][]string, 0, 1024), 0, 0
+	for rows.Next() {
+		cur++
+		row, err := rows.ColumnsFormula()
+		if err != nil {
+			break
+		}
+		if len(row) > 0 {
+			if emptyRows := cur - maxVal - 1; emptyRows > 0 {
+				results = append(results, make([][]string, emptyRows)...)
+			}
+			results = append(results, row)
+			maxVal = cur
+		}
+	}
+	return results[:maxVal], rows.Close()
+}
+
 // Rows defines an iterator to a sheet.
 type Rows struct {
 	err                     error
@@ -201,6 +247,53 @@ func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 	return rowIterator.cells, rowIterator.err
 }
 
+// ColumnsFormula return the current row's column formulas. This fetches the worksheet
+// data as a stream, returns each cell's formula in a row. Cells without formulas will
+// return empty strings. This will not skip empty rows in the tail of the worksheet.
+func (rows *Rows) ColumnsFormula() ([]string, error) {
+	if rows.curRow > rows.seekRow {
+		return nil, nil
+	}
+	var rowIterator rowXMLIterator
+	var token xml.Token
+	// SharedStrings 不需要用于读取公式
+	for {
+		if rows.token != nil {
+			token = rows.token
+		} else if token, _ = rows.decoder.Token(); token == nil {
+			break
+		}
+		switch xmlElement := token.(type) {
+		case xml.StartElement:
+			rowIterator.inElement = xmlElement.Name.Local
+			if rowIterator.inElement == "row" {
+				rowNum := 0
+				if rowNum, rowIterator.err = attrValToInt("r", xmlElement.Attr); rowNum != 0 {
+					rows.curRow = rowNum
+				} else if rows.token == nil {
+					rows.curRow++
+				}
+				rows.token = token
+				rows.seekRowOpts = extractRowOpts(xmlElement.Attr)
+				if rows.curRow > rows.seekRow {
+					rows.token = nil
+					return rowIterator.cells, rowIterator.err
+				}
+			}
+			if rows.rowXMLHandlerFormula(&rowIterator, &xmlElement); rowIterator.err != nil {
+				rows.token = nil
+				return rowIterator.cells, rowIterator.err
+			}
+			rows.token = nil
+		case xml.EndElement:
+			if xmlElement.Name.Local == "sheetData" {
+				return rowIterator.cells, rowIterator.err
+			}
+		}
+	}
+	return rowIterator.cells, rowIterator.err
+}
+
 // extractRowOpts extract row element attributes.
 func extractRowOpts(attrs []xml.Attr) RowOpts {
 	rowOpts := RowOpts{Height: defaultRowHeight}
@@ -246,6 +339,39 @@ func (rows *Rows) rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.Sta
 		blank := rowIterator.cellCol - len(rowIterator.cells)
 		if val, _ := colCell.getValueFrom(rows.f, rows.sst, raw); val != "" || colCell.F != nil {
 			rowIterator.cells = append(appendSpace(blank, rowIterator.cells), val)
+		}
+	}
+}
+
+// rowXMLHandlerFormula parse the row XML element of the worksheet to extract formulas.
+func (rows *Rows) rowXMLHandlerFormula(rowIterator *rowXMLIterator, xmlElement *xml.StartElement) {
+	if rowIterator.inElement == "c" {
+		rowIterator.cellCol++
+		colCell := xlsxC{}
+		colCell.cellXMLHandler(rows.decoder, xmlElement)
+		if colCell.R != "" {
+			if rowIterator.cellCol, _, rowIterator.err = CellNameToCoordinates(colCell.R); rowIterator.err != nil {
+				return
+			}
+		}
+		blank := rowIterator.cellCol - len(rowIterator.cells)
+		// 提取公式
+		formula := ""
+		if colCell.F != nil {
+			// 处理 shared formula
+			if colCell.F.T == STCellFormulaTypeShared && colCell.F.Si != nil {
+				// 尝试获取 worksheet 来解析 shared formula
+				ws, err := rows.f.workSheetReader(rows.sheet)
+				if err == nil {
+					formula, _ = getSharedFormula(ws, *colCell.F.Si, colCell.R)
+				}
+			} else {
+				formula = colCell.F.Content
+			}
+		}
+		// 只添加有公式的单元格或保持位置对齐
+		if formula != "" || len(rowIterator.cells) < rowIterator.cellCol {
+			rowIterator.cells = append(appendSpace(blank, rowIterator.cells), formula)
 		}
 	}
 }
