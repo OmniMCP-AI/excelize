@@ -1269,12 +1269,123 @@ func calcEq(rOpd, lOpd formulaArg, opdStack *Stack) error {
 
 // calcNEq evaluate not equal arithmetic operations.
 func calcNEq(rOpd, lOpd formulaArg, opdStack *Stack) error {
+	// 支持数组公式：逐元素不等于比较
+	if lOpd.Type == ArgMatrix && rOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i, row := range lOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				result[i][j] = newBoolFormulaArg(cell.Value() != rOpd.Value())
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if rOpd.Type == ArgMatrix && lOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(rOpd.Matrix))
+		for i, row := range rOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				result[i][j] = newBoolFormulaArg(lOpd.Value() != cell.Value())
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if lOpd.Type == ArgMatrix && rOpd.Type == ArgMatrix {
+		if len(lOpd.Matrix) != len(rOpd.Matrix) {
+			return errors.New(formulaErrorVALUE)
+		}
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i := range lOpd.Matrix {
+			if len(lOpd.Matrix[i]) != len(rOpd.Matrix[i]) {
+				return errors.New(formulaErrorVALUE)
+			}
+			result[i] = make([]formulaArg, len(lOpd.Matrix[i]))
+			for j := range lOpd.Matrix[i] {
+				result[i][j] = newBoolFormulaArg(lOpd.Matrix[i][j].Value() != rOpd.Matrix[i][j].Value())
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
 	opdStack.Push(newBoolFormulaArg(rOpd.Value() != lOpd.Value()))
 	return nil
 }
 
 // calcL evaluate less than arithmetic operations.
 func calcL(rOpd, lOpd formulaArg, opdStack *Stack) error {
+	// 支持数组公式：逐元素小于比较
+	if lOpd.Type == ArgMatrix && rOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i, row := range lOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				cellNum := cell.ToNumber()
+				rNum := rOpd.ToNumber()
+				if cellNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(cellNum.Number < rNum.Number)
+				} else if cell.Type == ArgString && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(cell.Value(), rOpd.Value()) == -1)
+				} else if cellNum.Type == ArgNumber && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if rOpd.Type == ArgMatrix && lOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(rOpd.Matrix))
+		for i, row := range rOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				lNum := lOpd.ToNumber()
+				cellNum := cell.ToNumber()
+				if lNum.Type == ArgNumber && cellNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number < cellNum.Number)
+				} else if lOpd.Type == ArgString && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Value(), cell.Value()) == -1)
+				} else if lNum.Type == ArgNumber && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if lOpd.Type == ArgMatrix && rOpd.Type == ArgMatrix {
+		if len(lOpd.Matrix) != len(rOpd.Matrix) {
+			return errors.New(formulaErrorVALUE)
+		}
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i := range lOpd.Matrix {
+			if len(lOpd.Matrix[i]) != len(rOpd.Matrix[i]) {
+				return errors.New(formulaErrorVALUE)
+			}
+			result[i] = make([]formulaArg, len(lOpd.Matrix[i]))
+			for j := range lOpd.Matrix[i] {
+				lNum := lOpd.Matrix[i][j].ToNumber()
+				rNum := rOpd.Matrix[i][j].ToNumber()
+				if lNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number < rNum.Number)
+				} else if lOpd.Matrix[i][j].Type == ArgString && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Matrix[i][j].Value(), rOpd.Matrix[i][j].Value()) == -1)
+				} else if lNum.Type == ArgNumber && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	// 标量比较（现有功能）
 	if rOpd.Type == ArgNumber && lOpd.Type == ArgNumber {
 		opdStack.Push(newBoolFormulaArg(lOpd.Number < rOpd.Number))
 	}
@@ -1292,6 +1403,77 @@ func calcL(rOpd, lOpd formulaArg, opdStack *Stack) error {
 
 // calcLe evaluate less than or equal arithmetic operations.
 func calcLe(rOpd, lOpd formulaArg, opdStack *Stack) error {
+	// 支持数组公式：逐元素小于等于比较
+	if lOpd.Type == ArgMatrix && rOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i, row := range lOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				cellNum := cell.ToNumber()
+				rNum := rOpd.ToNumber()
+				if cellNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(cellNum.Number <= rNum.Number)
+				} else if cell.Type == ArgString && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(cell.Value(), rOpd.Value()) != 1)
+				} else if cellNum.Type == ArgNumber && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if rOpd.Type == ArgMatrix && lOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(rOpd.Matrix))
+		for i, row := range rOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				lNum := lOpd.ToNumber()
+				cellNum := cell.ToNumber()
+				if lNum.Type == ArgNumber && cellNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number <= cellNum.Number)
+				} else if lOpd.Type == ArgString && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Value(), cell.Value()) != 1)
+				} else if lNum.Type == ArgNumber && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if lOpd.Type == ArgMatrix && rOpd.Type == ArgMatrix {
+		if len(lOpd.Matrix) != len(rOpd.Matrix) {
+			return errors.New(formulaErrorVALUE)
+		}
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i := range lOpd.Matrix {
+			if len(lOpd.Matrix[i]) != len(rOpd.Matrix[i]) {
+				return errors.New(formulaErrorVALUE)
+			}
+			result[i] = make([]formulaArg, len(lOpd.Matrix[i]))
+			for j := range lOpd.Matrix[i] {
+				lNum := lOpd.Matrix[i][j].ToNumber()
+				rNum := rOpd.Matrix[i][j].ToNumber()
+				if lNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number <= rNum.Number)
+				} else if lOpd.Matrix[i][j].Type == ArgString && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Matrix[i][j].Value(), rOpd.Matrix[i][j].Value()) != 1)
+				} else if lNum.Type == ArgNumber && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(false)
+				} else {
+					result[i][j] = newBoolFormulaArg(true)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	// 标量比较（现有功能）
 	if rOpd.Type == ArgNumber && lOpd.Type == ArgNumber {
 		opdStack.Push(newBoolFormulaArg(lOpd.Number <= rOpd.Number))
 	}
@@ -1309,6 +1491,77 @@ func calcLe(rOpd, lOpd formulaArg, opdStack *Stack) error {
 
 // calcG evaluate greater than arithmetic operations.
 func calcG(rOpd, lOpd formulaArg, opdStack *Stack) error {
+	// 支持数组公式：逐元素大于比较
+	if lOpd.Type == ArgMatrix && rOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i, row := range lOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				cellNum := cell.ToNumber()
+				rNum := rOpd.ToNumber()
+				if cellNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(cellNum.Number > rNum.Number)
+				} else if cell.Type == ArgString && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(cell.Value(), rOpd.Value()) == 1)
+				} else if cellNum.Type == ArgNumber && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if rOpd.Type == ArgMatrix && lOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(rOpd.Matrix))
+		for i, row := range rOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				lNum := lOpd.ToNumber()
+				cellNum := cell.ToNumber()
+				if lNum.Type == ArgNumber && cellNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number > cellNum.Number)
+				} else if lOpd.Type == ArgString && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Value(), cell.Value()) == 1)
+				} else if lNum.Type == ArgNumber && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if lOpd.Type == ArgMatrix && rOpd.Type == ArgMatrix {
+		if len(lOpd.Matrix) != len(rOpd.Matrix) {
+			return errors.New(formulaErrorVALUE)
+		}
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i := range lOpd.Matrix {
+			if len(lOpd.Matrix[i]) != len(rOpd.Matrix[i]) {
+				return errors.New(formulaErrorVALUE)
+			}
+			result[i] = make([]formulaArg, len(lOpd.Matrix[i]))
+			for j := range lOpd.Matrix[i] {
+				lNum := lOpd.Matrix[i][j].ToNumber()
+				rNum := rOpd.Matrix[i][j].ToNumber()
+				if lNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number > rNum.Number)
+				} else if lOpd.Matrix[i][j].Type == ArgString && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Matrix[i][j].Value(), rOpd.Matrix[i][j].Value()) == 1)
+				} else if lNum.Type == ArgNumber && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	// 标量比较（现有功能）
 	if rOpd.Type == ArgNumber && lOpd.Type == ArgNumber {
 		opdStack.Push(newBoolFormulaArg(lOpd.Number > rOpd.Number))
 	}
@@ -1326,6 +1579,77 @@ func calcG(rOpd, lOpd formulaArg, opdStack *Stack) error {
 
 // calcGe evaluate greater than or equal arithmetic operations.
 func calcGe(rOpd, lOpd formulaArg, opdStack *Stack) error {
+	// 支持数组公式：逐元素大于等于比较
+	if lOpd.Type == ArgMatrix && rOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i, row := range lOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				cellNum := cell.ToNumber()
+				rNum := rOpd.ToNumber()
+				if cellNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(cellNum.Number >= rNum.Number)
+				} else if cell.Type == ArgString && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(cell.Value(), rOpd.Value()) != -1)
+				} else if cellNum.Type == ArgNumber && rOpd.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if rOpd.Type == ArgMatrix && lOpd.Type != ArgMatrix {
+		result := make([][]formulaArg, len(rOpd.Matrix))
+		for i, row := range rOpd.Matrix {
+			result[i] = make([]formulaArg, len(row))
+			for j, cell := range row {
+				lNum := lOpd.ToNumber()
+				cellNum := cell.ToNumber()
+				if lNum.Type == ArgNumber && cellNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number >= cellNum.Number)
+				} else if lOpd.Type == ArgString && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Value(), cell.Value()) != -1)
+				} else if lNum.Type == ArgNumber && cell.Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	if lOpd.Type == ArgMatrix && rOpd.Type == ArgMatrix {
+		if len(lOpd.Matrix) != len(rOpd.Matrix) {
+			return errors.New(formulaErrorVALUE)
+		}
+		result := make([][]formulaArg, len(lOpd.Matrix))
+		for i := range lOpd.Matrix {
+			if len(lOpd.Matrix[i]) != len(rOpd.Matrix[i]) {
+				return errors.New(formulaErrorVALUE)
+			}
+			result[i] = make([]formulaArg, len(lOpd.Matrix[i]))
+			for j := range lOpd.Matrix[i] {
+				lNum := lOpd.Matrix[i][j].ToNumber()
+				rNum := rOpd.Matrix[i][j].ToNumber()
+				if lNum.Type == ArgNumber && rNum.Type == ArgNumber {
+					result[i][j] = newBoolFormulaArg(lNum.Number >= rNum.Number)
+				} else if lOpd.Matrix[i][j].Type == ArgString && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(strings.Compare(lOpd.Matrix[i][j].Value(), rOpd.Matrix[i][j].Value()) != -1)
+				} else if lNum.Type == ArgNumber && rOpd.Matrix[i][j].Type == ArgString {
+					result[i][j] = newBoolFormulaArg(true)
+				} else {
+					result[i][j] = newBoolFormulaArg(false)
+				}
+			}
+		}
+		opdStack.Push(newMatrixFormulaArg(result))
+		return nil
+	}
+	// 标量比较（现有功能）
 	if rOpd.Type == ArgNumber && lOpd.Type == ArgNumber {
 		opdStack.Push(newBoolFormulaArg(lOpd.Number >= rOpd.Number))
 	}
