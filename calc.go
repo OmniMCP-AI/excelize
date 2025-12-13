@@ -915,14 +915,29 @@ func (f *File) CalcCellValues(sheet string, cells []string, opts ...Options) (ma
 	}
 
 	results := make(map[string]string, len(cells))
+	var errors []error
 
 	// Calculate all cells, benefiting from cache
+	// Skip cells that fail to calculate and collect errors
 	for _, cell := range cells {
 		result, err := f.CalcCellValue(sheet, cell, opts...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to calculate %s: %w", cell, err)
+			errors = append(errors, fmt.Errorf("failed to calculate %s: %w", cell, err))
+			continue
 		}
 		results[cell] = result
+	}
+
+	// Return partial results with combined errors if any
+	if len(errors) > 0 {
+		var errMsg string
+		for i, err := range errors {
+			if i > 0 {
+				errMsg += "; "
+			}
+			errMsg += err.Error()
+		}
+		return results, fmt.Errorf("%s", errMsg)
 	}
 
 	return results, nil
