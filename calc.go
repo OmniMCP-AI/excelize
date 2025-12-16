@@ -1071,7 +1071,15 @@ func (f *File) evalInfixExp(ctx *calcContext, sheet, cell string, tokens []efp.T
 
 			// current token is args or range, skip next token, order required: parse reference first
 			if token.TSubType == efp.TokenSubTypeRange {
-				if opftStack.Peek().(efp.Token) != opfStack.Peek().(efp.Token) {
+				// 检查是否是 TRUE/FALSE 关键字（大小写不敏感）
+				upperValue := strings.ToUpper(token.TValue)
+				if upperValue == "TRUE" || upperValue == "FALSE" {
+					// 将其作为布尔值处理
+					token.TType = efp.TokenTypeOperand
+					token.TSubType = efp.TokenSubTypeLogical
+					token.TValue = upperValue
+					// 继续正常处理，让它走 parseToken 路径
+				} else if opftStack.Peek().(efp.Token) != opfStack.Peek().(efp.Token) {
 					refTo := f.getDefinedNameRefTo(token.TValue, sheet)
 					if refTo != "" {
 						token.TValue = refTo
@@ -1083,8 +1091,7 @@ func (f *File) evalInfixExp(ctx *calcContext, sheet, cell string, tokens []efp.T
 					}
 					opfdStack.Push(result)
 					continue
-				}
-				if nextToken.TType == efp.TokenTypeArgument || nextToken.TType == efp.TokenTypeFunction {
+				} else if nextToken.TType == efp.TokenTypeArgument || nextToken.TType == efp.TokenTypeFunction {
 					// parse reference: reference or range at here
 					refTo := f.getDefinedNameRefTo(token.TValue, sheet)
 					if refTo != "" {
@@ -2034,15 +2041,24 @@ func formulaArgToToken(arg formulaArg) efp.Token {
 func (f *File) parseToken(ctx *calcContext, sheet string, token efp.Token, opdStack, optStack *Stack) error {
 	// parse reference: must reference at here
 	if token.TSubType == efp.TokenSubTypeRange {
-		refTo := f.getDefinedNameRefTo(token.TValue, sheet)
-		if refTo != "" {
-			token.TValue = refTo
+		// 检查是否是 TRUE/FALSE 关键字（大小写不敏感）
+		upperValue := strings.ToUpper(token.TValue)
+		if upperValue == "TRUE" || upperValue == "FALSE" {
+			// 将其作为布尔值处理，而不是单元格引用
+			token.TType = efp.TokenTypeOperand
+			token.TSubType = efp.TokenSubTypeLogical
+			token.TValue = upperValue
+		} else {
+			refTo := f.getDefinedNameRefTo(token.TValue, sheet)
+			if refTo != "" {
+				token.TValue = refTo
+			}
+			result, err := f.parseReference(ctx, sheet, token.TValue)
+			if err != nil {
+				return errors.New(formulaErrorNAME)
+			}
+			token = formulaArgToToken(result)
 		}
-		result, err := f.parseReference(ctx, sheet, token.TValue)
-		if err != nil {
-			return errors.New(formulaErrorNAME)
-		}
-		token = formulaArgToToken(result)
 	}
 	if isOperatorPrefixToken(token) {
 		if err := f.parseOperatorPrefixToken(optStack, opdStack, token); err != nil {
@@ -2217,17 +2233,35 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 		}
 	}
 
+	// 检查是否是跨工作表引用（当前计算的工作表与单元格所在工作表不同）
+	isCrossSheet := ctx.entry != "" && !strings.HasPrefix(ctx.entry, sheet+"!")
+
 	if formula, _ := f.getCellFormula(sheet, cell, true); len(formula) != 0 {
+		// 对于跨工作表引用，优先使用缓存值
+		if isCrossSheet {
+			if cachedValue, err := f.GetCellValue(sheet, cell); err == nil && cachedValue != "" {
+				return newStringFormulaArg(cachedValue), nil
+			} else {
+			}
+		}
+
 		ctx.mu.Lock()
 		if ctx.entry != ref {
 			if ctx.iterations[ref] <= f.options.MaxCalcIterations {
 				ctx.iterations[ref]++
 				ctx.mu.Unlock()
-				arg, _ = f.calcCellValue(ctx, sheet, cell)
+				arg, calcErr := f.calcCellValue(ctx, sheet, cell)
 				// 修复: 写入 iterationsCache 需要加锁保护
 				ctx.mu.Lock()
 				ctx.iterationsCache[ref] = arg
 				ctx.mu.Unlock()
+
+				// 如果计算失败，回退到缓存值
+				if calcErr != nil || arg.Type == ArgError {
+					if cachedValue, err := f.GetCellValue(sheet, cell); err == nil && cachedValue != "" {
+						return newStringFormulaArg(cachedValue), nil
+					}
+				}
 				return arg, nil
 			}
 			cachedResult := ctx.iterationsCache[ref]
