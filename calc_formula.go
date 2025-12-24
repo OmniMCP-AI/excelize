@@ -147,8 +147,10 @@ func (f *File) CalcFormulaValue(sheet, cell, formula string, opts ...Options) (s
 	}
 
 	// Clear cache for this cell only to prevent stale results
+	// Need to clear both raw and formatted cache entries
 	ref := fmt.Sprintf("%s!%s", sheet, cell)
-	f.calcCache.Delete(ref)
+	f.calcCache.Delete(fmt.Sprintf("%s!raw=true", ref))
+	f.calcCache.Delete(fmt.Sprintf("%s!raw=false", ref))
 
 	return result, calcErr
 }

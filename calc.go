@@ -847,16 +847,18 @@ type formulaFuncs struct {
 //	Z.TEST
 //	ZTEST
 func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string, err error) {
-	cacheKey := fmt.Sprintf("%s!%s", sheet, cell)
-	if cachedResult, found := f.calcCache.Load(cacheKey); found {
-		return cachedResult.(string), nil
-	}
 	options := f.getOptions(opts...)
 	var (
 		rawCellValue = options.RawCellValue
 		styleIdx     int
 		token        formulaArg
 	)
+	// Include rawCellValue in cache key to ensure different formatting options
+	// produce separate cache entries
+	cacheKey := fmt.Sprintf("%s!%s!raw=%t", sheet, cell, rawCellValue)
+	if cachedResult, found := f.calcCache.Load(cacheKey); found {
+		return cachedResult.(string), nil
+	}
 	if token, err = f.calcCellValue(&calcContext{
 		entry:             fmt.Sprintf("%s!%s", sheet, cell),
 		maxCalcIterations: options.MaxCalcIterations,
@@ -2340,7 +2342,9 @@ func (f *File) clearCellCache(sheet, cell string) {
 	ref := fmt.Sprintf("%s!%s", sheet, cell)
 
 	// Clear calcCache for this cell
-	f.calcCache.Delete(ref)
+	// Need to clear both raw and formatted cache entries
+	f.calcCache.Delete(fmt.Sprintf("%s!raw=true", ref))
+	f.calcCache.Delete(fmt.Sprintf("%s!raw=false", ref))
 
 	// Clear rangeCache entries that might include this cell
 	col, row, err := CellNameToCoordinates(cell)
