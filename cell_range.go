@@ -353,23 +353,8 @@ func (f *File) getCellDataFromWorksheet(ws *xlsxWorksheet, sst *xlsxSST, s *xlsx
 	for colIdx := range rowData.C {
 		colData := &rowData.C[colIdx]
 		if cell == colData.R {
-			var value string
-			// Handle shared string
-			if colData.T == "s" && sst != nil {
-				if xlsxSI := 0; colData.V != "" {
-					if v, err := strconv.Atoi(colData.V); err == nil {
-						xlsxSI = v
-					}
-					if xlsxSI >= 0 && xlsxSI < len(sst.SI) {
-						value = sst.SI[xlsxSI].String()
-					}
-				}
-				if value == "" {
-					value = colData.V
-				}
-			} else {
-				value = colData.V
-			}
+			// Get formatted value using getValueFrom (respects rawCellValue)
+			value, _ := colData.getValueFrom(f, sst, rawCellValue)
 
 			// Get style
 			styleID := ws.prepareCellStyle(col, row, colData.S)
