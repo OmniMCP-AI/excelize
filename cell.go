@@ -1461,7 +1461,15 @@ func (ws *xlsxWorksheet) prepareCell(cell string) (*xlsxC, int, int, error) {
 	}
 
 	ws.prepareSheetXML(col, row)
-	return &ws.SheetData.Row[row-1].C[col-1], col, row, err
+	// Bounds check to prevent panic in concurrent scenarios
+	if row < 1 || row > len(ws.SheetData.Row) {
+		return nil, 0, 0, newCellNameToCoordinatesError(cell, newInvalidCellNameError(cell))
+	}
+	rowData := &ws.SheetData.Row[row-1]
+	if col < 1 || col > len(rowData.C) {
+		return nil, 0, 0, newCellNameToCoordinatesError(cell, newInvalidCellNameError(cell))
+	}
+	return &rowData.C[col-1], col, row, err
 }
 
 // getCellStringFunc does common value extraction workflow for all get cell
@@ -1486,8 +1494,9 @@ func (f *File) getCellStringFunc(sheet, cell string, fn func(x *xlsxWorksheet, c
 		return "", err
 	}
 	lastRowNum := 0
-	if l := len(ws.SheetData.Row); l > 0 {
-		lastRowNum = ws.SheetData.Row[l-1].R
+	rowCount := len(ws.SheetData.Row)
+	if rowCount > 0 {
+		lastRowNum = ws.SheetData.Row[rowCount-1].R
 	}
 
 	// keep in mind: row starts from 1
@@ -1495,7 +1504,11 @@ func (f *File) getCellStringFunc(sheet, cell string, fn func(x *xlsxWorksheet, c
 		return "", nil
 	}
 
-	idx, found := sort.Find(len(ws.SheetData.Row), func(i int) int {
+	idx, found := sort.Find(rowCount, func(i int) int {
+		// Bounds check to prevent panic if array was modified
+		if i >= len(ws.SheetData.Row) {
+			return 1
+		}
 		if ws.SheetData.Row[i].R == row {
 			return 0
 		}
@@ -1504,7 +1517,7 @@ func (f *File) getCellStringFunc(sheet, cell string, fn func(x *xlsxWorksheet, c
 		}
 		return 1
 	})
-	if !found {
+	if !found || idx >= len(ws.SheetData.Row) {
 		return "", nil
 	}
 	rowData := ws.SheetData.Row[idx]
