@@ -329,6 +329,77 @@ func (f *File) workSheetReader(sheet string) (ws *xlsxWorksheet, err error) {
 	return
 }
 
+// LoadWorksheet explicitly loads and caches a worksheet into memory. This
+// function provides explicit control over worksheet initialization and caching.
+// If the worksheet is already cached, this function returns immediately without
+// re-parsing. This is useful when you want to:
+//   - Pre-load worksheets for better performance
+//   - Control when the parsing overhead occurs
+//   - Check if a worksheet is already loaded
+//
+// Example:
+//
+//	// Pre-load a worksheet before batch operations
+//	if err := f.LoadWorksheet("Sheet1"); err != nil {
+//	    return err
+//	}
+//	// Now all operations on Sheet1 will be fast (no parsing overhead)
+//	for i := 1; i <= 100000; i++ {
+//	    cell, _ := excelize.CoordinatesToCellName(1, i)
+//	    value, _ := f.GetCellValue("Sheet1", cell) // Fast: worksheet already loaded
+//	}
+func (f *File) LoadWorksheet(sheet string) error {
+	_, err := f.workSheetReader(sheet)
+	return err
+}
+
+// IsWorksheetLoaded checks whether a worksheet has been loaded into the cache.
+// Returns true if the worksheet is already in memory, false otherwise.
+// This function is useful for cache management and avoiding redundant loads.
+//
+// Example:
+//
+//	if !f.IsWorksheetLoaded("Sheet1") {
+//	    fmt.Println("Loading worksheet...")
+//	    f.LoadWorksheet("Sheet1")
+//	}
+func (f *File) IsWorksheetLoaded(sheet string) bool {
+	if err := checkSheetName(sheet); err != nil {
+		return false
+	}
+	name, ok := f.getSheetXMLPath(sheet)
+	if !ok {
+		return false
+	}
+	_, loaded := f.Sheet.Load(name)
+	return loaded
+}
+
+// UnloadWorksheet removes a worksheet from the cache to free memory.
+// This is useful for large files when you've finished processing a worksheet
+// and want to free up memory before loading another one.
+//
+// Example:
+//
+//	// Process worksheets one at a time to limit memory usage
+//	for _, sheet := range f.GetSheetList() {
+//	    f.LoadWorksheet(sheet)
+//	    // ... process sheet ...
+//	    f.UnloadWorksheet(sheet)  // Free memory
+//	}
+func (f *File) UnloadWorksheet(sheet string) error {
+	if err := checkSheetName(sheet); err != nil {
+		return err
+	}
+	name, ok := f.getSheetXMLPath(sheet)
+	if !ok {
+		return ErrSheetNotExist{sheet}
+	}
+	f.Sheet.Delete(name)
+	f.checked.Delete(name)
+	return nil
+}
+
 // checkSheet provides a function to fill each row element and make that is
 // continuous in a worksheet of XML.
 func (ws *xlsxWorksheet) checkSheet() {
