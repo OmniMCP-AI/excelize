@@ -1051,6 +1051,92 @@ func TestCopySheet(t *testing.T) {
 	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestCopySheet.xlsx")))
 }
 
+func TestDuplicateSheet(t *testing.T) {
+	f := NewFile()
+
+	// Set up some data in Sheet1
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", "Original Data"))
+	assert.NoError(t, f.SetCellValue("Sheet1", "A2", 123))
+	assert.NoError(t, f.SetCellFormula("Sheet1", "A3", "A2*2"))
+
+	// Duplicate Sheet1
+	newIndex, err := f.DuplicateSheet(0)
+	assert.NoError(t, err)
+	assert.True(t, newIndex > 0)
+
+	// Check the new sheet name
+	newName := f.GetSheetName(newIndex)
+	assert.Equal(t, "Sheet1 (2)", newName)
+
+	// Verify data was copied
+	val, err := f.GetCellValue(newName, "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Original Data", val)
+
+	val2, err := f.GetCellValue(newName, "A2")
+	assert.NoError(t, err)
+	assert.Equal(t, "123", val2)
+
+	formula, err := f.GetCellFormula(newName, "A3")
+	assert.NoError(t, err)
+	assert.Equal(t, "A2*2", formula)
+
+	// Modify duplicated sheet - should not affect original
+	assert.NoError(t, f.SetCellValue(newName, "A1", "Modified"))
+	origVal, err := f.GetCellValue("Sheet1", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Original Data", origVal)
+
+	// Duplicate again - should create "Sheet1 (3)"
+	newIndex2, err := f.DuplicateSheet(0)
+	assert.NoError(t, err)
+	newName2 := f.GetSheetName(newIndex2)
+	assert.Equal(t, "Sheet1 (3)", newName2)
+
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestDuplicateSheet.xlsx")))
+}
+
+func TestDuplicateSheetAt(t *testing.T) {
+	f := NewFile()
+
+	// Create multiple sheets
+	f.NewSheet("Sheet2")
+	f.NewSheet("Sheet3")
+
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", "Data1"))
+	assert.NoError(t, f.SetCellValue("Sheet2", "A1", "Data2"))
+	assert.NoError(t, f.SetCellValue("Sheet3", "A1", "Data3"))
+
+	// Duplicate Sheet1 and insert at position 1 (between Sheet1 and Sheet2)
+	newIndex, err := f.DuplicateSheetAt(0, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, newIndex)
+
+	// Check sheet order
+	assert.Equal(t, "Sheet1", f.GetSheetName(0))
+	assert.Equal(t, "Sheet1 (2)", f.GetSheetName(1))
+	assert.Equal(t, "Sheet2", f.GetSheetName(2))
+	assert.Equal(t, "Sheet3", f.GetSheetName(3))
+
+	// Verify data
+	val, err := f.GetCellValue("Sheet1 (2)", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Data1", val)
+
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestDuplicateSheetAt.xlsx")))
+}
+
+func TestDuplicateSheetError(t *testing.T) {
+	f := NewFile()
+
+	// Test invalid index
+	_, err := f.DuplicateSheet(-1)
+	assert.Error(t, err)
+
+	_, err = f.DuplicateSheet(999)
+	assert.Error(t, err)
+}
+
 func TestCopySheetError(t *testing.T) {
 	f, err := prepareTestBook1()
 	assert.NoError(t, err)

@@ -601,3 +601,572 @@ func adjustColForMove(colStr string, fromCol, toCol int) string {
 
 	return colStr
 }
+
+// MoveRows moves multiple consecutive rows from one position to another, updating all formula references.
+// This is more efficient than calling MoveRow multiple times, as it updates formulas in a single pass.
+//
+// Parameters:
+//   - sheet: The worksheet name
+//   - fromRow: The first row number to move (1-based)
+//   - count: Number of consecutive rows to move
+//   - toRow: The destination row number (1-based) for the first row
+//
+// Example:
+//
+//	// Move rows 2, 3, 4 to rows 10, 11, 12
+//	err := f.MoveRows("Sheet1", 2, 3, 10)
+func (f *File) MoveRows(sheet string, fromRow, count, toRow int) error {
+	if fromRow < 1 {
+		return newInvalidRowNumberError(fromRow)
+	}
+	if toRow < 1 {
+		return newInvalidRowNumberError(toRow)
+	}
+	if count < 1 {
+		return newInvalidRowNumberError(count)
+	}
+
+	// Calculate the last row in the source range
+	lastFromRow := fromRow + count - 1
+
+	// Check if ranges overlap
+	if fromRow == toRow {
+		return nil
+	}
+
+	// Detect invalid overlap scenarios
+	if fromRow < toRow && toRow <= lastFromRow {
+		// Moving down and destination is within source range
+		return newInvalidRowNumberError(toRow)
+	}
+	lastToRow := toRow + count - 1
+	if fromRow > toRow && fromRow <= lastToRow {
+		// Moving up and source overlaps with destination
+		return newInvalidRowNumberError(fromRow)
+	}
+
+	// Step 1: Update ALL formulas in ALL worksheets
+	if err := f.updateAllFormulasForRowsMove(sheet, fromRow, count, toRow); err != nil {
+		return err
+	}
+
+	// Step 2: Move the actual cell data
+	if err := f.moveCellDataForRows(sheet, fromRow, count, toRow); err != nil {
+		return err
+	}
+
+	// Clear caches
+	f.calcCache.Clear()
+	f.rangeCache.Clear()
+
+	return nil
+}
+
+// moveCellDataForRows physically moves multiple rows of cell data
+func (f *File) moveCellDataForRows(sheet string, fromRow, count, toRow int) error {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+
+	lastFromRow := fromRow + count - 1
+	lastToRow := toRow + count - 1
+
+	// Create a map of old row -> new row positions
+	rowMapping := make(map[int]int)
+
+	if fromRow < toRow {
+		// Moving down: rows [fromRow, lastFromRow] move to [toRow, lastToRow]
+		// Rows between lastFromRow+1 and lastToRow shift up by count
+		for i := 0; i < count; i++ {
+			rowMapping[fromRow+i] = toRow + i
+		}
+		for row := lastFromRow + 1; row <= lastToRow; row++ {
+			rowMapping[row] = row - count
+		}
+	} else {
+		// Moving up: rows [fromRow, lastFromRow] move to [toRow, lastToRow]
+		// Rows between toRow and fromRow-1 shift down by count
+		for i := 0; i < count; i++ {
+			rowMapping[fromRow+i] = toRow + i
+		}
+		for row := toRow; row < fromRow; row++ {
+			rowMapping[row] = row + count
+		}
+	}
+
+	// Collect all row data indexed by their old row numbers
+	oldRowData := make(map[int]xlsxRow)
+	for rowIdx := range ws.SheetData.Row {
+		oldRow := ws.SheetData.Row[rowIdx].R
+		oldRowData[oldRow] = ws.SheetData.Row[rowIdx]
+	}
+
+	// Create new row data with updated positions
+	newRowData := make(map[int]xlsxRow)
+	for oldRow, rowData := range oldRowData {
+		if newRow, shouldMove := rowMapping[oldRow]; shouldMove {
+			// This row is affected by the move
+			rowData.R = newRow
+			// Update cell references within the row
+			for cellIdx := range rowData.C {
+				colName, _, _ := SplitCellName(rowData.C[cellIdx].R)
+				rowData.C[cellIdx].R, _ = JoinCellName(colName, newRow)
+			}
+			newRowData[newRow] = rowData
+		} else {
+			// This row is not affected
+			newRowData[oldRow] = rowData
+		}
+	}
+
+	// Rebuild the worksheet row array
+	ws.SheetData.Row = ws.SheetData.Row[:0]
+	for rowNum := 1; rowNum <= TotalRows; rowNum++ {
+		if rowData, exists := newRowData[rowNum]; exists {
+			ws.SheetData.Row = append(ws.SheetData.Row, rowData)
+		}
+	}
+
+	return nil
+}
+
+// updateAllFormulasForRowsMove updates all formulas for multiple rows move
+func (f *File) updateAllFormulasForRowsMove(sheet string, fromRow, count, toRow int) error {
+	for _, sheetN := range f.GetSheetList() {
+		worksheet, err := f.workSheetReader(sheetN)
+		if err != nil {
+			if err.Error() == newNotWorksheetError(sheetN).Error() {
+				continue
+			}
+			return err
+		}
+
+		for rowIdx := range worksheet.SheetData.Row {
+			for cellIdx := range worksheet.SheetData.Row[rowIdx].C {
+				cell := &worksheet.SheetData.Row[rowIdx].C[cellIdx]
+
+				// Update regular formula
+				if cell.f != "" {
+					cell.f = updateFormulaForRowsMove(sheet, sheetN, cell.f, fromRow, count, toRow)
+				}
+
+				// Update cell formula
+				if cell.F != nil && cell.F.Content != "" {
+					cell.F.Content = updateFormulaForRowsMove(sheet, sheetN, cell.F.Content, fromRow, count, toRow)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// updateFormulaForRowsMove updates a formula for multiple rows move
+func updateFormulaForRowsMove(sheet, currentSheet, formula string, fromRow, count, toRow int) string {
+	ps := efp.ExcelParser()
+	tokens := ps.Parse(formula)
+	var result string
+
+	for _, token := range tokens {
+		if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeRange {
+			operand := updateOperandForRowsMove(sheet, currentSheet, token.TValue, fromRow, count, toRow)
+			result += operand
+		} else if paren := transformParenthesesToken(token); paren != "" {
+			result += paren
+		} else if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeText {
+			result += string(efp.QuoteDouble) + strings.ReplaceAll(token.TValue, "\"", "\"\"") + string(efp.QuoteDouble)
+		} else {
+			result += token.TValue
+		}
+	}
+
+	return result
+}
+
+// updateOperandForRowsMove updates operand for multiple rows move
+func updateOperandForRowsMove(sheet, currentSheet, operand string, fromRow, count, toRow int) string {
+	// Parse sheet name if present
+	var sheetName, cellRef string
+	tokens := strings.Split(operand, "!")
+	if len(tokens) == 2 {
+		sheetName = tokens[0]
+		cellRef = tokens[1]
+	} else {
+		sheetName = currentSheet
+		cellRef = operand
+	}
+
+	// Only process if this references the sheet where the move is happening
+	if sheetName != sheet {
+		unquotedName := strings.Trim(sheetName, "'")
+		if unquotedName != sheet {
+			return operand
+		}
+	}
+
+	// Parse the cell reference
+	var col, row, result string
+	var hasAbsCol, hasAbsRow bool
+
+	for _, r := range cellRef {
+		if r == '$' {
+			if col == "" {
+				hasAbsCol = true
+			} else {
+				hasAbsRow = true
+			}
+			continue
+		}
+		if ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') {
+			col += string(r)
+			continue
+		}
+		if '0' <= r && r <= '9' {
+			row += string(r)
+			continue
+		}
+		// Other characters (like : for ranges)
+		if col != "" && row != "" {
+			newRow := adjustRowForRowsMove(row, fromRow, count, toRow)
+			if hasAbsCol {
+				result += "$"
+			}
+			result += col
+			if hasAbsRow {
+				result += "$"
+			}
+			result += newRow
+			col, row = "", ""
+			hasAbsCol, hasAbsRow = false, false
+		} else if col != "" {
+			if hasAbsCol {
+				result += "$"
+			}
+			result += col
+			col = ""
+			hasAbsCol = false
+		}
+		result += string(r)
+	}
+
+	// Process final accumulated reference
+	if col != "" && row != "" {
+		newRow := adjustRowForRowsMove(row, fromRow, count, toRow)
+		if hasAbsCol {
+			result += "$"
+		}
+		result += col
+		if hasAbsRow {
+			result += "$"
+		}
+		result += newRow
+	} else if col != "" {
+		if hasAbsCol {
+			result += "$"
+		}
+		result += col
+	} else if row != "" {
+		result += row
+	}
+
+	// Re-add sheet name if it was present
+	if len(tokens) == 2 {
+		return tokens[0] + "!" + result
+	}
+	return result
+}
+
+// adjustRowForRowsMove adjusts a row number for multiple rows move
+func adjustRowForRowsMove(rowStr string, fromRow, count, toRow int) string {
+	rowNum, err := strconv.Atoi(rowStr)
+	if err != nil {
+		return rowStr
+	}
+
+	lastFromRow := fromRow + count - 1
+	lastToRow := toRow + count - 1
+
+	// If this row is in the source range being moved
+	if rowNum >= fromRow && rowNum <= lastFromRow {
+		offset := rowNum - fromRow
+		return strconv.Itoa(toRow + offset)
+	}
+
+	// If moving down (fromRow < toRow):
+	// Rows between lastFromRow+1 and lastToRow shift up by count
+	if fromRow < toRow && rowNum > lastFromRow && rowNum <= lastToRow {
+		return strconv.Itoa(rowNum - count)
+	}
+
+	// If moving up (fromRow > toRow):
+	// Rows between toRow and fromRow-1 shift down by count
+	if fromRow > toRow && rowNum >= toRow && rowNum < fromRow {
+		return strconv.Itoa(rowNum + count)
+	}
+
+	return rowStr
+}
+
+// MoveCols moves multiple consecutive columns from one position to another, updating all formula references.
+// This is more efficient than calling MoveCol multiple times, as it updates formulas in a single pass.
+//
+// Parameters:
+//   - sheet: The worksheet name
+//   - fromCol: The first column name to move (e.g., "B")
+//   - count: Number of consecutive columns to move
+//   - toCol: The destination column name (e.g., "F") for the first column
+//
+// Example:
+//
+//	// Move columns B, C, D to columns F, G, H
+//	err := f.MoveCols("Sheet1", "B", 3, "F")
+func (f *File) MoveCols(sheet string, fromCol string, count int, toCol string) error {
+	fromColNum, err := ColumnNameToNumber(fromCol)
+	if err != nil {
+		return err
+	}
+	toColNum, err := ColumnNameToNumber(toCol)
+	if err != nil {
+		return err
+	}
+	if count < 1 {
+		return err
+	}
+
+	lastFromCol := fromColNum + count - 1
+
+	// Check if ranges overlap
+	if fromColNum == toColNum {
+		return nil
+	}
+
+	// Detect invalid overlap scenarios
+	if fromColNum < toColNum && toColNum <= lastFromCol {
+		return err
+	}
+	lastToCol := toColNum + count - 1
+	if fromColNum > toColNum && fromColNum <= lastToCol {
+		return err
+	}
+
+	// Step 1: Update ALL formulas
+	if err := f.updateAllFormulasForColsMove(sheet, fromColNum, count, toColNum); err != nil {
+		return err
+	}
+
+	// Step 2: Move the actual cell data
+	if err := f.moveCellDataForCols(sheet, fromColNum, count, toColNum); err != nil {
+		return err
+	}
+
+	// Clear caches
+	f.calcCache.Clear()
+	f.rangeCache.Clear()
+
+	return nil
+}
+
+// moveCellDataForCols physically moves multiple columns of cell data
+func (f *File) moveCellDataForCols(sheet string, fromCol, count, toCol int) error {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+
+	lastFromCol := fromCol + count - 1
+	lastToCol := toCol + count - 1
+
+	// Create a map of old column -> new column positions
+	colMapping := make(map[int]int)
+
+	if fromCol < toCol {
+		// Moving right
+		for i := 0; i < count; i++ {
+			colMapping[fromCol+i] = toCol + i
+		}
+		for col := lastFromCol + 1; col <= lastToCol; col++ {
+			colMapping[col] = col - count
+		}
+	} else {
+		// Moving left
+		for i := 0; i < count; i++ {
+			colMapping[fromCol+i] = toCol + i
+		}
+		for col := toCol; col < fromCol; col++ {
+			colMapping[col] = col + count
+		}
+	}
+
+	// Apply the column mapping
+	for rowIdx := range ws.SheetData.Row {
+		for cellIdx := range ws.SheetData.Row[rowIdx].C {
+			colNum, rowNum, _ := CellNameToCoordinates(ws.SheetData.Row[rowIdx].C[cellIdx].R)
+			if newCol, exists := colMapping[colNum]; exists {
+				ws.SheetData.Row[rowIdx].C[cellIdx].R, _ = CoordinatesToCellName(newCol, rowNum)
+			}
+		}
+	}
+
+	return nil
+}
+
+// updateAllFormulasForColsMove updates all formulas for multiple columns move
+func (f *File) updateAllFormulasForColsMove(sheet string, fromCol, count, toCol int) error {
+	for _, sheetN := range f.GetSheetList() {
+		worksheet, err := f.workSheetReader(sheetN)
+		if err != nil {
+			if err.Error() == newNotWorksheetError(sheetN).Error() {
+				continue
+			}
+			return err
+		}
+
+		for rowIdx := range worksheet.SheetData.Row {
+			for cellIdx := range worksheet.SheetData.Row[rowIdx].C {
+				cell := &worksheet.SheetData.Row[rowIdx].C[cellIdx]
+
+				if cell.f != "" {
+					cell.f = updateFormulaForColsMove(sheet, sheetN, cell.f, fromCol, count, toCol)
+				}
+
+				if cell.F != nil && cell.F.Content != "" {
+					cell.F.Content = updateFormulaForColsMove(sheet, sheetN, cell.F.Content, fromCol, count, toCol)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// updateFormulaForColsMove updates a formula for multiple columns move
+func updateFormulaForColsMove(sheet, currentSheet, formula string, fromCol, count, toCol int) string {
+	ps := efp.ExcelParser()
+	tokens := ps.Parse(formula)
+	var result string
+
+	for _, token := range tokens {
+		if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeRange {
+			operand := updateOperandForColsMove(sheet, currentSheet, token.TValue, fromCol, count, toCol)
+			result += operand
+		} else if paren := transformParenthesesToken(token); paren != "" {
+			result += paren
+		} else if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeText {
+			result += string(efp.QuoteDouble) + strings.ReplaceAll(token.TValue, "\"", "\"\"") + string(efp.QuoteDouble)
+		} else {
+			result += token.TValue
+		}
+	}
+
+	return result
+}
+
+// updateOperandForColsMove updates operand for multiple columns move
+func updateOperandForColsMove(sheet, currentSheet, operand string, fromCol, count, toCol int) string {
+	var sheetName, cellRef string
+	tokens := strings.Split(operand, "!")
+	if len(tokens) == 2 {
+		sheetName = tokens[0]
+		cellRef = tokens[1]
+	} else {
+		sheetName = currentSheet
+		cellRef = operand
+	}
+
+	if sheetName != sheet {
+		unquotedName := strings.Trim(sheetName, "'")
+		if unquotedName != sheet {
+			return operand
+		}
+	}
+
+	var col, row, result string
+	var hasAbsCol, hasAbsRow bool
+
+	for _, r := range cellRef {
+		if r == '$' {
+			if col == "" {
+				hasAbsCol = true
+			} else {
+				hasAbsRow = true
+			}
+			continue
+		}
+		if ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') {
+			col += string(r)
+			continue
+		}
+		if '0' <= r && r <= '9' {
+			row += string(r)
+			continue
+		}
+		if col != "" {
+			newCol := adjustColForColsMove(col, fromCol, count, toCol)
+			if hasAbsCol {
+				result += "$"
+			}
+			result += newCol
+			if row != "" {
+				if hasAbsRow {
+					result += "$"
+				}
+				result += row
+			}
+			col, row = "", ""
+			hasAbsCol, hasAbsRow = false, false
+		}
+		result += string(r)
+	}
+
+	if col != "" {
+		newCol := adjustColForColsMove(col, fromCol, count, toCol)
+		if hasAbsCol {
+			result += "$"
+		}
+		result += newCol
+		if row != "" {
+			if hasAbsRow {
+				result += "$"
+			}
+			result += row
+		}
+	}
+
+	if len(tokens) == 2 {
+		return tokens[0] + "!" + result
+	}
+	return result
+}
+
+// adjustColForColsMove adjusts a column name for multiple columns move
+func adjustColForColsMove(colStr string, fromCol, count, toCol int) string {
+	colNum, err := ColumnNameToNumber(colStr)
+	if err != nil {
+		return colStr
+	}
+
+	lastFromCol := fromCol + count - 1
+	lastToCol := toCol + count - 1
+
+	// If this column is in the source range being moved
+	if colNum >= fromCol && colNum <= lastFromCol {
+		offset := colNum - fromCol
+		colName, _ := ColumnNumberToName(toCol + offset)
+		return colName
+	}
+
+	// If moving right: columns between lastFromCol+1 and lastToCol shift left
+	if fromCol < toCol && colNum > lastFromCol && colNum <= lastToCol {
+		colName, _ := ColumnNumberToName(colNum - count)
+		return colName
+	}
+
+	// If moving left: columns between toCol and fromCol-1 shift right
+	if fromCol > toCol && colNum >= toCol && colNum < fromCol {
+		colName, _ := ColumnNumberToName(colNum + count)
+		return colName
+	}
+
+	return colStr
+}

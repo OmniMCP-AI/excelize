@@ -1,6 +1,7 @@
 package excelize
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -315,4 +316,244 @@ func TestMoveColWithAbsoluteReferences(t *testing.T) {
 	// Verify absolute reference updated
 	formula, _ := f.GetCellFormula("Sheet1", "A2")
 	assert.Equal(t, "$D$1", formula, "Absolute reference should update to moved column")
+}
+
+func TestMoveRows(t *testing.T) {
+	// Test moving multiple consecutive rows
+	f := NewFile()
+
+	// Set up data: 10 rows
+	for i := 1; i <= 10; i++ {
+		assert.NoError(t, f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i), fmt.Sprintf("Row%d", i)))
+	}
+
+	// Set up formulas
+	assert.NoError(t, f.SetCellFormula("Sheet1", "B1", "A2+A3+A4")) // References rows 2,3,4
+	assert.NoError(t, f.SetCellFormula("Sheet1", "B5", "A7"))       // References row 7
+
+	// Move rows 2,3,4 (count=3) to row 7
+	// Before: Row1, Row2, Row3, Row4, Row5, Row6, Row7, Row8, Row9, Row10
+	// After:  Row1, Row5, Row6, Row7, Row8, Row9, Row2, Row3, Row4, Row10
+	assert.NoError(t, f.MoveRows("Sheet1", 2, 3, 7))
+
+	// Verify data positions
+	val1, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "Row1", val1, "Row1 should stay")
+
+	val2, _ := f.GetCellValue("Sheet1", "A2")
+	assert.Equal(t, "Row5", val2, "Row5 should shift up to position 2")
+
+	val3, _ := f.GetCellValue("Sheet1", "A3")
+	assert.Equal(t, "Row6", val3, "Row6 should shift up to position 3")
+
+	val4, _ := f.GetCellValue("Sheet1", "A4")
+	assert.Equal(t, "Row7", val4, "Row7 should shift up to position 4")
+
+	val5, _ := f.GetCellValue("Sheet1", "A5")
+	assert.Equal(t, "Row8", val5, "Row8 should shift up to position 5")
+
+	val6, _ := f.GetCellValue("Sheet1", "A6")
+	assert.Equal(t, "Row9", val6, "Row9 should shift up to position 6")
+
+	val7, _ := f.GetCellValue("Sheet1", "A7")
+	assert.Equal(t, "Row2", val7, "Row2 should move to position 7")
+
+	val8, _ := f.GetCellValue("Sheet1", "A8")
+	assert.Equal(t, "Row3", val8, "Row3 should move to position 8")
+
+	val9, _ := f.GetCellValue("Sheet1", "A9")
+	assert.Equal(t, "Row4", val9, "Row4 should move to position 9")
+
+	val10, _ := f.GetCellValue("Sheet1", "A10")
+	assert.Equal(t, "Row10", val10, "Row10 should stay")
+
+	// Verify formulas updated
+	formula1, _ := f.GetCellFormula("Sheet1", "B1")
+	assert.Equal(t, "A7+A8+A9", formula1, "Formula should reference moved rows (now at 7,8,9)")
+
+	// Original B5 had formula "A7" and is now at B2 (row shifted up)
+	// And A7 shifted up to A4
+	formula2, _ := f.GetCellFormula("Sheet1", "B2")
+	assert.Equal(t, "A4", formula2, "Formula should shift with row and update reference")
+}
+
+func TestMoveRowsUp(t *testing.T) {
+	// Test moving multiple rows upward
+	f := NewFile()
+
+	for i := 1; i <= 10; i++ {
+		assert.NoError(t, f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i), fmt.Sprintf("Row%d", i)))
+	}
+
+	// Move rows 7,8,9 (count=3) to row 3
+	// Before: Row1, Row2, Row3, Row4, Row5, Row6, Row7, Row8, Row9, Row10
+	// After:  Row1, Row2, Row7, Row8, Row9, Row3, Row4, Row5, Row6, Row10
+	assert.NoError(t, f.MoveRows("Sheet1", 7, 3, 3))
+
+	val1, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "Row1", val1)
+
+	val2, _ := f.GetCellValue("Sheet1", "A2")
+	assert.Equal(t, "Row2", val2)
+
+	val3, _ := f.GetCellValue("Sheet1", "A3")
+	assert.Equal(t, "Row7", val3, "Row7 should move to position 3")
+
+	val4, _ := f.GetCellValue("Sheet1", "A4")
+	assert.Equal(t, "Row8", val4, "Row8 should move to position 4")
+
+	val5, _ := f.GetCellValue("Sheet1", "A5")
+	assert.Equal(t, "Row9", val5, "Row9 should move to position 5")
+
+	val6, _ := f.GetCellValue("Sheet1", "A6")
+	assert.Equal(t, "Row3", val6, "Row3 should shift down to position 6")
+
+	val7, _ := f.GetCellValue("Sheet1", "A7")
+	assert.Equal(t, "Row4", val7, "Row4 should shift down to position 7")
+
+	val8, _ := f.GetCellValue("Sheet1", "A8")
+	assert.Equal(t, "Row5", val8, "Row5 should shift down to position 8")
+
+	val9, _ := f.GetCellValue("Sheet1", "A9")
+	assert.Equal(t, "Row6", val9, "Row6 should shift down to position 9")
+
+	val10, _ := f.GetCellValue("Sheet1", "A10")
+	assert.Equal(t, "Row10", val10)
+}
+
+func TestMoveRowsSamePosition(t *testing.T) {
+	// Test moving rows to the same position (should be no-op)
+	f := NewFile()
+
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", "Row1"))
+	assert.NoError(t, f.SetCellValue("Sheet1", "A2", "Row2"))
+
+	assert.NoError(t, f.MoveRows("Sheet1", 1, 2, 1))
+
+	val1, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "Row1", val1)
+
+	val2, _ := f.GetCellValue("Sheet1", "A2")
+	assert.Equal(t, "Row2", val2)
+}
+
+func TestMoveCols(t *testing.T) {
+	// Test moving multiple consecutive columns
+	f := NewFile()
+
+	// Set up data: columns A-J (10 columns)
+	for i := 1; i <= 10; i++ {
+		colName, _ := ColumnNumberToName(i)
+		assert.NoError(t, f.SetCellValue("Sheet1", colName+"1", "Col"+colName))
+	}
+
+	// Set up formulas
+	assert.NoError(t, f.SetCellFormula("Sheet1", "A2", "B1+C1+D1")) // References columns B,C,D
+	assert.NoError(t, f.SetCellFormula("Sheet1", "E2", "G1"))       // References column G
+
+	// Move columns B,C,D (count=3) to column G
+	// Before: A, B, C, D, E, F, G, H, I, J
+	// After:  A, E, F, G, H, I, B, C, D, J
+	assert.NoError(t, f.MoveCols("Sheet1", "B", 3, "G"))
+
+	// Verify data positions
+	valA, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "ColA", valA, "Column A should stay")
+
+	valB, _ := f.GetCellValue("Sheet1", "B1")
+	assert.Equal(t, "ColE", valB, "Column E should shift left to position B")
+
+	valC, _ := f.GetCellValue("Sheet1", "C1")
+	assert.Equal(t, "ColF", valC, "Column F should shift left to position C")
+
+	valD, _ := f.GetCellValue("Sheet1", "D1")
+	assert.Equal(t, "ColG", valD, "Column G should shift left to position D")
+
+	valE, _ := f.GetCellValue("Sheet1", "E1")
+	assert.Equal(t, "ColH", valE, "Column H should shift left to position E")
+
+	valF, _ := f.GetCellValue("Sheet1", "F1")
+	assert.Equal(t, "ColI", valF, "Column I should shift left to position F")
+
+	valG, _ := f.GetCellValue("Sheet1", "G1")
+	assert.Equal(t, "ColB", valG, "Column B should move to position G")
+
+	valH, _ := f.GetCellValue("Sheet1", "H1")
+	assert.Equal(t, "ColC", valH, "Column C should move to position H")
+
+	valI, _ := f.GetCellValue("Sheet1", "I1")
+	assert.Equal(t, "ColD", valI, "Column D should move to position I")
+
+	valJ, _ := f.GetCellValue("Sheet1", "J1")
+	assert.Equal(t, "ColJ", valJ, "Column J should stay")
+
+	// Verify formulas updated
+	formula1, _ := f.GetCellFormula("Sheet1", "A2")
+	assert.Equal(t, "G1+H1+I1", formula1, "Formula should reference moved columns (now at G,H,I)")
+
+	// Original E2 had formula "G1" and is now at B2 (column shifted left)
+	// And G1 shifted left to D1
+	formula2, _ := f.GetCellFormula("Sheet1", "B2")
+	assert.Equal(t, "D1", formula2, "Formula should shift with column and update reference")
+}
+
+func TestMoveColsLeft(t *testing.T) {
+	// Test moving multiple columns leftward
+	f := NewFile()
+
+	for i := 1; i <= 10; i++ {
+		colName, _ := ColumnNumberToName(i)
+		assert.NoError(t, f.SetCellValue("Sheet1", colName+"1", "Col"+colName))
+	}
+
+	// Move columns G,H,I (count=3) to column C
+	// Before: A, B, C, D, E, F, G, H, I, J
+	// After:  A, B, G, H, I, C, D, E, F, J
+	assert.NoError(t, f.MoveCols("Sheet1", "G", 3, "C"))
+
+	valA, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "ColA", valA)
+
+	valB, _ := f.GetCellValue("Sheet1", "B1")
+	assert.Equal(t, "ColB", valB)
+
+	valC, _ := f.GetCellValue("Sheet1", "C1")
+	assert.Equal(t, "ColG", valC, "Column G should move to position C")
+
+	valD, _ := f.GetCellValue("Sheet1", "D1")
+	assert.Equal(t, "ColH", valD, "Column H should move to position D")
+
+	valE, _ := f.GetCellValue("Sheet1", "E1")
+	assert.Equal(t, "ColI", valE, "Column I should move to position E")
+
+	valF, _ := f.GetCellValue("Sheet1", "F1")
+	assert.Equal(t, "ColC", valF, "Column C should shift right to position F")
+
+	valG, _ := f.GetCellValue("Sheet1", "G1")
+	assert.Equal(t, "ColD", valG, "Column D should shift right to position G")
+
+	valH, _ := f.GetCellValue("Sheet1", "H1")
+	assert.Equal(t, "ColE", valH, "Column E should shift right to position H")
+
+	valI, _ := f.GetCellValue("Sheet1", "I1")
+	assert.Equal(t, "ColF", valI, "Column F should shift right to position I")
+
+	valJ, _ := f.GetCellValue("Sheet1", "J1")
+	assert.Equal(t, "ColJ", valJ)
+}
+
+func TestMoveColsSamePosition(t *testing.T) {
+	// Test moving columns to the same position (should be no-op)
+	f := NewFile()
+
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", "ColA"))
+	assert.NoError(t, f.SetCellValue("Sheet1", "B1", "ColB"))
+
+	assert.NoError(t, f.MoveCols("Sheet1", "A", 2, "A"))
+
+	valA, _ := f.GetCellValue("Sheet1", "A1")
+	assert.Equal(t, "ColA", valA)
+
+	valB, _ := f.GetCellValue("Sheet1", "B1")
+	assert.Equal(t, "ColB", valB)
 }

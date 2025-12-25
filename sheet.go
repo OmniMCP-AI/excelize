@@ -809,6 +809,96 @@ func (f *File) CopySheet(from, to int) error {
 	return f.copySheet(from, to)
 }
 
+// DuplicateSheet provides a function to duplicate a worksheet and automatically
+// create a new sheet with a unique name. This mimics Excel's "Duplicate" behavior
+// where it creates a copy like "Sheet1 (2)".
+//
+// The function returns the index of the newly created sheet.
+//
+// For example, duplicate the first worksheet:
+//
+//	newIndex, err := f.DuplicateSheet(0)
+//
+// Or duplicate by name:
+//
+//	sheet := f.GetSheetName(0)
+//	index, _ := f.GetSheetIndex(sheet)
+//	newIndex, err := f.DuplicateSheet(index)
+func (f *File) DuplicateSheet(index int) (int, error) {
+	sheetName := f.GetSheetName(index)
+	if sheetName == "" {
+		return -1, ErrSheetIdx
+	}
+
+	// Generate unique name like Excel does: "Sheet1 (2)", "Sheet1 (3)", etc.
+	newName := f.generateDuplicateSheetName(sheetName)
+
+	// Create new sheet
+	newIndex, err := f.NewSheet(newName)
+	if err != nil {
+		return -1, err
+	}
+
+	// Copy content from source to new sheet
+	err = f.copySheet(index, newIndex)
+	if err != nil {
+		return -1, err
+	}
+
+	return newIndex, nil
+}
+
+// DuplicateSheetAt duplicates a worksheet and inserts it at a specific position.
+// This allows control over where the duplicated sheet appears in the workbook.
+//
+// For example, duplicate the first worksheet and insert it at position 2:
+//
+//	newIndex, err := f.DuplicateSheetAt(0, 2)
+func (f *File) DuplicateSheetAt(sourceIndex, targetPosition int) (int, error) {
+	// First duplicate the sheet (will be added at the end)
+	newIndex, err := f.DuplicateSheet(sourceIndex)
+	if err != nil {
+		return -1, err
+	}
+
+	// Move to target position if needed
+	if targetPosition >= 0 && targetPosition != newIndex {
+		// Get workbook to reorder sheets
+		wb, err := f.workbookReader()
+		if err != nil {
+			return -1, err
+		}
+
+		// Ensure target position is valid
+		if targetPosition > len(wb.Sheets.Sheet) {
+			targetPosition = len(wb.Sheets.Sheet)
+		}
+
+		// Reorder sheets array
+		if targetPosition < newIndex {
+			// Moving forward - shift others back
+			sheet := wb.Sheets.Sheet[newIndex]
+			copy(wb.Sheets.Sheet[targetPosition+1:newIndex+1], wb.Sheets.Sheet[targetPosition:newIndex])
+			wb.Sheets.Sheet[targetPosition] = sheet
+			newIndex = targetPosition
+		}
+	}
+
+	return newIndex, nil
+}
+
+// generateDuplicateSheetName generates a unique sheet name like Excel does.
+// For "Sheet1", it generates "Sheet1 (2)", "Sheet1 (3)", etc.
+func (f *File) generateDuplicateSheetName(baseName string) string {
+	// Try the base name with (2), (3), etc.
+	for i := 2; ; i++ {
+		newName := fmt.Sprintf("%s (%d)", baseName, i)
+		if index, _ := f.GetSheetIndex(newName); index == -1 {
+			return newName
+		}
+	}
+}
+
 // copySheet provides a function to duplicate a worksheet by gave source and
 // target worksheet name.
 func (f *File) copySheet(from, to int) error {
