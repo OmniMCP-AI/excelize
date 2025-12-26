@@ -32,7 +32,8 @@ func TestBatchSetFormulasAndRecalculate_CrossSheetReference(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "C2", Formula: "=Sheet1!B2+10"},
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify initial calculations
 	b1, _ := f.GetCellValue("Sheet1", "B1")
@@ -72,7 +73,8 @@ func TestBatchSetFormulasAndRecalculate_CrossSheetChain(t *testing.T) {
 		{Sheet: "Sheet3", Cell: "D1", Formula: "=Sheet2!C1*3"},   // 75
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify chain: 10 -> 20 -> 25 -> 75
 	b1, _ := f.GetCellValue("Sheet1", "B1")
@@ -107,7 +109,8 @@ func TestBatchSetFormulasAndRecalculate_MixedSheetFormulas(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "C1", Formula: "=Sheet1!B1+B1"},  // 400 (100+300)
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify all calculations
 	sheet1B1, _ := f.GetCellValue("Sheet1", "B1")

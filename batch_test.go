@@ -206,7 +206,7 @@ func TestBatchUpdateAndRecalculate(t *testing.T) {
 	}
 
 	// Batch update and recalculate
-	err := f.BatchUpdateAndRecalculate(updates)
+	_, err := f.BatchUpdateAndRecalculate(updates)
 	assert.NoError(t, err)
 
 	// Verify formulas were recalculated
@@ -251,7 +251,7 @@ func TestBatchUpdateAndRecalculateMultiSheet(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "A2", Value: 200},
 	}
 
-	err = f.BatchUpdateAndRecalculate(updates)
+	_, err = f.BatchUpdateAndRecalculate(updates)
 	assert.NoError(t, err)
 
 	// Verify Sheet1
@@ -275,7 +275,7 @@ func TestBatchUpdateAndRecalculateNoFormulas(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A2", Value: 200},
 	}
 
-	err := f.BatchUpdateAndRecalculate(updates)
+	_, err := f.BatchUpdateAndRecalculate(updates)
 	assert.NoError(t, err)
 
 	// Verify values
@@ -311,7 +311,7 @@ func TestBatchUpdateAndRecalculateComplexFormulas(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A3", Value: 30},
 	}
 
-	err := f.BatchUpdateAndRecalculate(updates)
+	_, err := f.BatchUpdateAndRecalculate(updates)
 	assert.NoError(t, err)
 
 	// Verify cascading calculation
@@ -352,7 +352,7 @@ func TestBatchUpdateAndRecalculateLargeDataset(t *testing.T) {
 		expectedSum += value
 	}
 
-	err := f.BatchUpdateAndRecalculate(updates)
+	_, err := f.BatchUpdateAndRecalculate(updates)
 	assert.NoError(t, err)
 
 	// Verify SUM

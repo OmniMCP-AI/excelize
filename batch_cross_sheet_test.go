@@ -33,7 +33,8 @@ func TestBatchUpdateAndRecalculate_CrossSheet(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "C3", Formula: "=Sheet1!A1+Sheet1!A2"},
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify initial calculations
 	b1, _ := f.GetCellValue("Sheet1", "B1")
@@ -51,7 +52,8 @@ func TestBatchUpdateAndRecalculate_CrossSheet(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A2", Value: 600},
 	}
 
-	assert.NoError(t, f.BatchUpdateAndRecalculate(updates))
+	_, err = f.BatchUpdateAndRecalculate(updates)
+	assert.NoError(t, err)
 
 	// Verify Sheet1 formulas are recalculated
 	b1After, _ := f.GetCellValue("Sheet1", "B1")
@@ -98,7 +100,8 @@ func TestBatchUpdateAndRecalculate_CrossSheetComplex(t *testing.T) {
 		{Sheet: "Sheet3", Cell: "D1", Formula: "=Sheet2!C1*3"},
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify initial chain: 10 -> 20 -> 25 -> 75
 	b1, _ := f.GetCellValue("Sheet1", "B1")
@@ -115,7 +118,8 @@ func TestBatchUpdateAndRecalculate_CrossSheetComplex(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A1", Value: 50},
 	}
 
-	assert.NoError(t, f.BatchUpdateAndRecalculate(updates))
+	_, err = f.BatchUpdateAndRecalculate(updates)
+	assert.NoError(t, err)
 
 	// Verify chain: 50 -> 100 -> 105 -> 315
 	b1After, _ := f.GetCellValue("Sheet1", "B1")
@@ -150,7 +154,8 @@ func TestBatchUpdateAndRecalculate_CrossSheetMultipleUpdates(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "C1", Formula: "=SUM(Sheet1!B1:B3)"},
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Initial: SUM(20,40,60) = 120
 	c1, _ := f.GetCellValue("Sheet2", "C1")
@@ -163,7 +168,8 @@ func TestBatchUpdateAndRecalculate_CrossSheetMultipleUpdates(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A3", Value: 300},
 	}
 
-	assert.NoError(t, f.BatchUpdateAndRecalculate(updates))
+	_, err = f.BatchUpdateAndRecalculate(updates)
+	assert.NoError(t, err)
 
 	// Verify Sheet2 formula recalculates: SUM(200,400,600) = 1200
 	c1After, _ := f.GetCellValue("Sheet2", "C1")
@@ -185,7 +191,8 @@ func TestBatchUpdateAndRecalculate_SingleSheetStillWorks(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "C1", Formula: "=B1+5"},
 	}
 
-	assert.NoError(t, f.BatchSetFormulasAndRecalculate(formulas))
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
+	assert.NoError(t, err)
 
 	// Verify initial
 	b1, _ := f.GetCellValue("Sheet1", "B1")
@@ -199,7 +206,8 @@ func TestBatchUpdateAndRecalculate_SingleSheetStillWorks(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "A1", Value: 100},
 	}
 
-	assert.NoError(t, f.BatchUpdateAndRecalculate(updates))
+	_, err = f.BatchUpdateAndRecalculate(updates)
+	assert.NoError(t, err)
 
 	// Verify recalculation
 	b1After, _ := f.GetCellValue("Sheet1", "B1")

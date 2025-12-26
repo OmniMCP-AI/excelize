@@ -81,6 +81,12 @@ func (f *File) RecalculateSheet(sheet string) error {
 	return f.recalculateAllInSheet(calcChain, sheetID)
 }
 
+// AffectedCell 表示受影响的单元格
+type AffectedCell struct {
+	Sheet string // 工作表名称
+	Cell  string // 单元格坐标
+}
+
 // BatchUpdateAndRecalculate 批量更新单元格值并重新计算受影响的公式
 //
 // 此函数结合了 BatchSetCellValue 和重新计算的功能，
@@ -91,9 +97,14 @@ func (f *File) RecalculateSheet(sheet string) error {
 // 2. ✅ 只遍历一次 calcChain
 // 3. ✅ 每个公式只计算一次（即使被多个更新影响）
 // 4. ✅ 性能提升可达 10-100 倍（取决于更新数量）
+// 5. ✅ 返回所有受影响的单元格列表
 //
 // 参数：
 //   updates: 单元格更新列表
+//
+// 返回：
+//   []AffectedCell: 所有重新计算的单元格列表
+//   error: 错误信息
 //
 // 示例：
 //
@@ -102,23 +113,24 @@ func (f *File) RecalculateSheet(sheet string) error {
 //	updates := []excelize.CellUpdate{
 //	    {Sheet: "Sheet1", Cell: "A1", Value: 200},
 //	}
-//	err := f.BatchUpdateAndRecalculate(updates)
+//	affected, err := f.BatchUpdateAndRecalculate(updates)
 //	// 结果：Sheet1.A1 = 200, Sheet2.B1 = 400 (自动重新计算)
-func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) error {
+//	// affected = [{Sheet: "Sheet1", Cell: "B1"}, {Sheet: "Sheet2", Cell: "B1"}]
+func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) ([]AffectedCell, error) {
 	// 1. 批量更新所有单元格
 	if err := f.BatchSetCellValue(updates); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. 读取 calcChain
 	calcChain, err := f.calcChainReader()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// If calcChain doesn't exist or is empty, nothing to recalculate
 	if calcChain == nil || len(calcChain.C) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// 3. 收集所有被更新的单元格（用于依赖检查）
@@ -136,7 +148,7 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) error {
 
 	// 5. 重新计算所有工作表（calcChain 包含所有工作表的公式）
 	// 按 calcChain 顺序计算，确保依赖关系正确
-	return f.recalculateAllSheets(calcChain)
+	return f.recalculateAllSheetsWithTracking(calcChain)
 }
 
 // BatchSetFormulas 批量设置公式，不触发重新计算
@@ -174,11 +186,16 @@ func (f *File) BatchSetFormulas(formulas []FormulaUpdate) error {
 // 2. ✅ 自动计算所有公式的值
 // 3. ✅ 自动更新 calcChain（计算链）
 // 4. ✅ 触发依赖公式的重新计算
+// 5. ✅ 返回所有受影响的单元格列表
 //
 // 相比循环调用 SetCellFormula + UpdateCellAndRecalculate，性能提升显著。
 //
 // 参数：
 //   formulas: 公式更新列表
+//
+// 返回：
+//   []AffectedCell: 所有重新计算的单元格列表
+//   error: 错误信息
 //
 // 示例：
 //
@@ -188,16 +205,17 @@ func (f *File) BatchSetFormulas(formulas []FormulaUpdate) error {
 //	    {Sheet: "Sheet1", Cell: "B3", Formula: "=A3*2"},
 //	    {Sheet: "Sheet1", Cell: "C1", Formula: "=SUM(B1:B3)"},
 //	}
-//	err := f.BatchSetFormulasAndRecalculate(formulas)
+//	affected, err := f.BatchSetFormulasAndRecalculate(formulas)
 //	// 现在所有公式都已设置、计算，并且 calcChain 已更新
-func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) error {
+//	// affected = [{Sheet: "Sheet1", Cell: "B1"}, {Sheet: "Sheet1", Cell: "B2"}, ...]
+func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) ([]AffectedCell, error) {
 	if len(formulas) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// 1. 批量设置公式
 	if err := f.BatchSetFormulas(formulas); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. 收集所有受影响的工作表和单元格
@@ -208,17 +226,24 @@ func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) error {
 
 	// 3. 为每个工作表更新 calcChain
 	if err := f.updateCalcChainForFormulas(formulas); err != nil {
-		return err
+		return nil, err
 	}
 
-	// 4. 重新计算每个受影响的工作表
-	for sheet := range affectedSheets {
+	// 4. 收集所有受影响的单元格
+	var affected []AffectedCell
+
+	// 5. 重新计算每个受影响的工作表
+	for sheet, cells := range affectedSheets {
 		if err := f.RecalculateSheet(sheet); err != nil {
-			return err
+			return nil, err
+		}
+		// 记录这些单元格
+		for _, cell := range cells {
+			affected = append(affected, AffectedCell{Sheet: sheet, Cell: cell})
 		}
 	}
 
-	return nil
+	return affected, nil
 }
 
 // updateCalcChainForFormulas 更新 calcChain 以包含新设置的公式
@@ -282,8 +307,15 @@ func (f *File) updateCalcChainForFormulas(formulas []FormulaUpdate) error {
 
 // recalculateAllSheets recalculates all formulas in all sheets according to calcChain order
 func (f *File) recalculateAllSheets(calcChain *xlsxCalcChain) error {
+	_, err := f.recalculateAllSheetsWithTracking(calcChain)
+	return err
+}
+
+// recalculateAllSheetsWithTracking recalculates all formulas and tracks affected cells
+func (f *File) recalculateAllSheetsWithTracking(calcChain *xlsxCalcChain) ([]AffectedCell, error) {
 	// Track current sheet ID (for handling I=0 case)
 	currentSheetID := -1
+	var affected []AffectedCell
 
 	// Recalculate all cells in calcChain order
 	for i := range calcChain.C {
@@ -305,7 +337,13 @@ func (f *File) recalculateAllSheets(calcChain *xlsxCalcChain) error {
 			// Continue even if one cell fails
 			continue
 		}
+
+		// Track the affected cell
+		affected = append(affected, AffectedCell{
+			Sheet: sheetName,
+			Cell:  c.R,
+		})
 	}
 
-	return nil
+	return affected, nil
 }

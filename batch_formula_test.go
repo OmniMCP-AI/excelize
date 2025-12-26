@@ -60,7 +60,7 @@ func TestBatchSetFormulasAndRecalculate(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "C1", Formula: "=SUM(B1:B3)"},
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Verify formulas are set
@@ -103,7 +103,7 @@ func TestBatchSetFormulasAndRecalculate_WithFormulaPrefix(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "B2", Formula: "A1*3"},   // Without '='
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Both should work
@@ -137,7 +137,7 @@ func TestBatchSetFormulasAndRecalculate_MultiSheet(t *testing.T) {
 		{Sheet: "Sheet2", Cell: "B2", Formula: "=B1+20"},
 	}
 
-	err = f.BatchSetFormulasAndRecalculate(formulas)
+	_, err = f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Verify Sheet1
@@ -184,7 +184,7 @@ func TestBatchSetFormulasAndRecalculate_ComplexDependencies(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "E1", Formula: "=C1+D1"},
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Verify calculated values
@@ -215,7 +215,7 @@ func TestBatchSetFormulasAndRecalculate_EmptyList(t *testing.T) {
 	}()
 
 	// Empty list should not error
-	err := f.BatchSetFormulasAndRecalculate([]FormulaUpdate{})
+	_, err := f.BatchSetFormulasAndRecalculate([]FormulaUpdate{})
 	assert.NoError(t, err)
 }
 
@@ -230,7 +230,7 @@ func TestBatchSetFormulasAndRecalculate_InvalidSheet(t *testing.T) {
 		{Sheet: "NonExistent", Cell: "B1", Formula: "=A1*2"},
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.Error(t, err, "Should error for non-existent sheet")
 }
 
@@ -263,7 +263,7 @@ func TestBatchSetFormulasAndRecalculate_LargeDataset(t *testing.T) {
 		Formula: "=SUM(B1:B100)",
 	})
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Verify some values
@@ -297,7 +297,7 @@ func TestBatchSetFormulasAndRecalculate_CalcChainUpdate(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "B2", Formula: "=B1+10"},
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// CalcChain should now exist and not be empty
@@ -341,7 +341,7 @@ func TestBatchSetFormulasAndRecalculate_UpdateExistingFormulas(t *testing.T) {
 		{Sheet: "Sheet1", Cell: "B1", Formula: "=A1*3"},  // Changed from *2 to *3
 	}
 
-	err := f.BatchSetFormulasAndRecalculate(formulas)
+	_, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
 	// Verify formula is updated
