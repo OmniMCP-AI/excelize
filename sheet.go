@@ -180,7 +180,8 @@ func (f *File) workSheetWriter() {
 			_ = encoder.Encode(sheet)
 			f.saveFileList(p.(string), replaceRelationshipsBytes(f.replaceNameSpaceBytes(p.(string), buffer.Bytes())))
 			_, ok := f.checked.Load(p.(string))
-			if ok {
+			// Only unload worksheet if KeepWorksheetInMemory option is not set
+			if ok && (f.options == nil || !f.options.KeepWorksheetInMemory) {
 				f.Sheet.Delete(p.(string))
 				f.checked.Delete(p.(string))
 			}

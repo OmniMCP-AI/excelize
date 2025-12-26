@@ -113,16 +113,17 @@ type ZipWriter interface {
 // CultureInfo specifies the country code for applying built-in language number
 // format code these effect by the system's local language settings.
 type Options struct {
-	MaxCalcIterations uint
-	Password          string
-	RawCellValue      bool
-	UnzipSizeLimit    int64
-	UnzipXMLSizeLimit int64
-	TmpDir            string
-	ShortDatePattern  string
-	LongDatePattern   string
-	LongTimePattern   string
-	CultureInfo       CultureName
+	MaxCalcIterations     uint
+	Password              string
+	RawCellValue          bool
+	UnzipSizeLimit        int64
+	UnzipXMLSizeLimit     int64
+	TmpDir                string
+	ShortDatePattern      string
+	LongDatePattern       string
+	LongTimePattern       string
+	CultureInfo           CultureName
+	KeepWorksheetInMemory bool
 }
 
 // OpenFile take the name of a spreadsheet file and returns a populated
