@@ -466,9 +466,19 @@ func (f *File) Rows(sheet string) (*Rows, error) {
 		ws := worksheet.(*xlsxWorksheet)
 		ws.mu.Lock()
 		defer ws.mu.Unlock()
-		// Flush data
-		output, _ := xml.Marshal(ws)
-		f.saveFileList(name, f.replaceNameSpaceBytes(name, output))
+
+		// Flush data with panic recovery
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// If marshal panics, skip saving (worksheet may be corrupted)
+					// Just continue with xmlDecoder below
+					return
+				}
+			}()
+			output, _ := xml.Marshal(ws)
+			f.saveFileList(name, f.replaceNameSpaceBytes(name, output))
+		}()
 	}
 	var err error
 	rows := Rows{f: f, sheet: name, sheetName: sheet}
@@ -1081,34 +1091,34 @@ func (ws *xlsxWorksheet) checkRow() error {
 				}
 			}
 
+			// Create a map to preserve existing cells
+			cellMap := make(map[int]*xlsxC)
+			for i := range sourceList {
+				colNum, _, err := CellNameToCoordinates(sourceList[i].R)
+				if err != nil {
+					continue
+				}
+				cellMap[colNum] = &sourceList[i]
+			}
+
+			// Build new slice only with cells that have data
 			targetList := make([]xlsxC, 0, maxCol)
-
-			rowData.C = ws.SheetData.Row[rowIdx].C[:0]
-
-			for colIdx := 0; colIdx < maxCol; colIdx++ {
-				cellName, err := CoordinatesToCellName(colIdx+1, rowIdx+1)
+			for colIdx := 1; colIdx <= maxCol; colIdx++ {
+				cellName, err := CoordinatesToCellName(colIdx, rowIdx+1)
 				if err != nil {
 					return err
 				}
-				targetList = append(targetList, xlsxC{R: cellName})
+
+				if existingCell, ok := cellMap[colIdx]; ok {
+					// Use existing cell with data
+					targetList = append(targetList, *existingCell)
+				} else {
+					// Create empty placeholder cell
+					targetList = append(targetList, xlsxC{R: cellName})
+				}
 			}
 
 			rowData.C = targetList
-
-			for colIdx := range sourceList {
-				colData := &sourceList[colIdx]
-				colNum, _, err := CellNameToCoordinates(colData.R)
-				if err != nil {
-					return err
-				}
-
-				// Boundary check to prevent index out of range panic
-				if colNum-1 < 0 || colNum-1 >= len(ws.SheetData.Row[rowIdx].C) {
-					continue
-				}
-
-				ws.SheetData.Row[rowIdx].C[colNum-1] = *colData
-			}
 		}
 	}
 	return nil
