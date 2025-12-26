@@ -155,6 +155,7 @@ func (f *File) workSheetWriter() {
 		arr     []byte
 		buffer  = bytes.NewBuffer(arr)
 		encoder = xml.NewEncoder(buffer)
+		toDelete []string  // Collect sheets to delete after Range completes
 	)
 	f.Sheet.Range(func(p, ws interface{}) bool {
 		if ws != nil {
@@ -180,15 +181,20 @@ func (f *File) workSheetWriter() {
 			_ = encoder.Encode(sheet)
 			f.saveFileList(p.(string), replaceRelationshipsBytes(f.replaceNameSpaceBytes(p.(string), buffer.Bytes())))
 			_, ok := f.checked.Load(p.(string))
-			// Only unload worksheet if KeepWorksheetInMemory option is not set
+			// Mark for deletion after Range completes
 			if ok && (f.options == nil || !f.options.KeepWorksheetInMemory) {
-				f.Sheet.Delete(p.(string))
-				f.checked.Delete(p.(string))
+				toDelete = append(toDelete, p.(string))
 			}
 			buffer.Reset()
 		}
 		return true
 	})
+
+	// Delete worksheets after Range completes (safe to modify sync.Map now)
+	for _, path := range toDelete {
+		f.Sheet.Delete(path)
+		f.checked.Delete(path)
+	}
 }
 
 // trimRow provides a function to trim empty rows.
