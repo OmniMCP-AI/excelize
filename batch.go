@@ -237,17 +237,93 @@ func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) ([]Affec
 		return nil, err
 	}
 
-	// 4. 收集所有受影响的单元格
-	var affected []AffectedCell
+	// 4. 收集被设置公式的单元格
+	setFormulaCells := make(map[string]map[string]bool)
+	for _, formula := range formulas {
+		if setFormulaCells[formula.Sheet] == nil {
+			setFormulaCells[formula.Sheet] = make(map[string]bool)
+		}
+		setFormulaCells[formula.Sheet][formula.Cell] = true
+	}
 
-	// 5. 重新计算每个受影响的工作表
-	for sheet, cells := range affectedSheets {
+	// 5. 重新计算所有公式
+	for sheet := range affectedSheets {
 		if err := f.RecalculateSheet(sheet); err != nil {
 			return nil, err
 		}
-		// 记录这些单元格
-		for _, cell := range cells {
-			affected = append(affected, AffectedCell{Sheet: sheet, Cell: cell})
+	}
+
+	// 6. 读取 calcChain 并找出依赖于新公式的其他单元格
+	calcChain, err := f.calcChainReader()
+	if err != nil {
+		return nil, err
+	}
+
+	if calcChain == nil || len(calcChain.C) == 0 {
+		return nil, nil
+	}
+
+	affectedFormulas := f.findAffectedFormulas(calcChain, setFormulaCells)
+
+	// 7. 只排除那些不依赖于同批其他公式的被设置单元格
+	// 如果 C1 依赖 B1，且 B1 和 C1 都被设置，则保留 C1
+	for sheet, cells := range setFormulaCells {
+		for cell := range cells {
+			cellKey := sheet + "!" + cell
+			// 检查这个单元格是否依赖于同批的其他公式
+			isDependentOnOthers := false
+
+			// 获取这个单元格的公式
+			ws, err := f.workSheetReader(sheet)
+			if err == nil {
+				col, row, _ := CellNameToCoordinates(cell)
+				cellData := f.getCellFromWorksheet(ws, col, row)
+				if cellData != nil && cellData.F != nil {
+					formula := cellData.F.Content
+					if formula == "" && cellData.F.T == STCellFormulaTypeShared && cellData.F.Si != nil {
+						formula, _ = getSharedFormula(ws, *cellData.F.Si, cell)
+					}
+
+					if formula != "" {
+						// 检查公式是否引用了同批的其他单元格
+						isDependentOnOthers = f.formulaReferencesUpdatedCells(formula, sheet, setFormulaCells)
+					}
+				}
+			}
+
+			// 如果不依赖于同批其他公式，则排除
+			if !isDependentOnOthers {
+				delete(affectedFormulas, cellKey)
+			}
+		}
+	}
+
+	// 8. 收集受影响单元格的缓存值
+	var affected []AffectedCell
+	for cellKey := range affectedFormulas {
+		cacheKey := cellKey + "!raw=false"
+		cachedValue := ""
+		if value, ok := f.calcCache.Load(cacheKey); ok && value != nil {
+			cachedValue = value.(string)
+		}
+
+		// 解析 cellKey (Sheet!Cell)
+		parts := make([]string, 0, 2)
+		lastIdx := 0
+		for i, c := range cellKey {
+			if c == '!' {
+				parts = append(parts, cellKey[lastIdx:i])
+				lastIdx = i + 1
+			}
+		}
+		parts = append(parts, cellKey[lastIdx:])
+
+		if len(parts) == 2 {
+			affected = append(affected, AffectedCell{
+				Sheet:       parts[0],
+				Cell:        parts[1],
+				CachedValue: cachedValue,
+			})
 		}
 	}
 
@@ -478,6 +554,34 @@ func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[s
 
 // formulaReferencesUpdatedCells 检查公式是否引用了被更新的单元格
 func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool) bool {
+	// 检查全列引用（A:A, $A:$A 等）
+	colRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+):(\$?[A-Z]+)`)
+	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
+
+	for _, match := range colMatches {
+		refSheet := currentSheet
+		if match[1] != "" {
+			refSheet = strings.TrimSuffix(match[1], "!")
+		}
+
+		// 检查被更新的单元格是否在这个列范围内
+		if updatedCells[refSheet] != nil {
+			for cell := range updatedCells[refSheet] {
+				col, _, err := CellNameToCoordinates(cell)
+				if err == nil {
+					colName, _ := ColumnNumberToName(col)
+					startCol := strings.ReplaceAll(match[2], "$", "")
+					endCol := strings.ReplaceAll(match[3], "$", "")
+
+					// 简单检查：如果列名在范围内
+					if colName >= startCol && colName <= endCol {
+						return true
+					}
+				}
+			}
+		}
+	}
+
 	// 简单的单元格引用匹配（A1, Sheet1!A1, $A$1 等）
 	cellRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+\$?[0-9]+)`)
 	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
@@ -499,6 +603,36 @@ func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updat
 
 // formulaReferencesAffectedCells 检查公式是否引用了受影响的单元格
 func (f *File) formulaReferencesAffectedCells(formula, currentSheet string, affectedCells map[string]bool) bool {
+	// 检查全列引用（A:A, $A:$A 等）
+	colRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+):(\$?[A-Z]+)`)
+	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
+
+	for _, match := range colMatches {
+		refSheet := currentSheet
+		if match[1] != "" {
+			refSheet = strings.TrimSuffix(match[1], "!")
+		}
+
+		// 检查受影响的单元格是否在这个列范围内
+		for cellKey := range affectedCells {
+			// 解析 cellKey (Sheet!Cell)
+			parts := strings.Split(cellKey, "!")
+			if len(parts) == 2 && parts[0] == refSheet {
+				col, _, err := CellNameToCoordinates(parts[1])
+				if err == nil {
+					colName, _ := ColumnNumberToName(col)
+					startCol := strings.ReplaceAll(match[2], "$", "")
+					endCol := strings.ReplaceAll(match[3], "$", "")
+
+					if colName >= startCol && colName <= endCol {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	// 单元格引用匹配
 	cellRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+\$?[0-9]+)`)
 	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
 

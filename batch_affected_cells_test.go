@@ -90,23 +90,12 @@ func TestBatchSetFormulasAndRecalculate_AffectedCells(t *testing.T) {
 	affected, err := f.BatchSetFormulasAndRecalculate(formulas)
 	assert.NoError(t, err)
 
-	// Verify affected cells
-	assert.Len(t, affected, 4, "Should have 4 affected cells")
+	// Verify affected cells - only C1 should be affected (depends on B1/B2/B3)
+	// B1, B2, B3 should NOT be in affected (they don't depend on other set formulas)
+	assert.Len(t, affected, 1, "Should have 1 affected cell (C1)")
 
-	expectedCells := map[string]bool{
-		"B1": true,
-		"B2": true,
-		"B3": true,
-		"C1": true,
-	}
-
-	for _, cell := range affected {
-		assert.Equal(t, "Sheet1", cell.Sheet)
-		assert.True(t, expectedCells[cell.Cell], fmt.Sprintf("Cell %s should be in affected list", cell.Cell))
-		delete(expectedCells, cell.Cell)
-	}
-
-	assert.Empty(t, expectedCells, "All expected cells should be tracked")
+	assert.Equal(t, "Sheet1", affected[0].Sheet)
+	assert.Equal(t, "C1", affected[0].Cell)
 
 	// Verify calculated values
 	c1, _ := f.GetCellValue("Sheet1", "C1")

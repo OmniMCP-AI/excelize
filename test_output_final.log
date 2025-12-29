@@ -1,0 +1,2649 @@
+=== RUN   TestRemoveRowWithFormulaRef
+--- PASS: TestRemoveRowWithFormulaRef (0.00s)
+=== RUN   TestRemoveRowCrossSheetRef
+--- PASS: TestRemoveRowCrossSheetRef (0.00s)
+=== RUN   TestInsertRowsWithFormula
+--- PASS: TestInsertRowsWithFormula (0.00s)
+=== RUN   TestRemoveColWithFormulaRef
+--- PASS: TestRemoveColWithFormulaRef (0.00s)
+=== RUN   TestAdjustMergeCells
+--- PASS: TestAdjustMergeCells (0.00s)
+=== RUN   TestAdjustAutoFilter
+--- PASS: TestAdjustAutoFilter (0.00s)
+=== RUN   TestAdjustTable
+--- PASS: TestAdjustTable (0.00s)
+=== RUN   TestAdjustHelper
+--- PASS: TestAdjustHelper (0.00s)
+=== RUN   TestAdjustCalcChain
+--- PASS: TestAdjustCalcChain (0.00s)
+=== RUN   TestAdjustCols
+--- PASS: TestAdjustCols (0.01s)
+=== RUN   TestAdjustColDimensions
+--- PASS: TestAdjustColDimensions (0.00s)
+=== RUN   TestAdjustRowDimensions
+--- PASS: TestAdjustRowDimensions (0.00s)
+=== RUN   TestAdjustHyperlinks
+--- PASS: TestAdjustHyperlinks (0.00s)
+=== RUN   TestAdjustFormula
+=== RUN   TestAdjustFormula/for_cells_affected_directly
+=== RUN   TestAdjustFormula/for_cells_affected_indirectly
+=== RUN   TestAdjustFormula/for_entire_cols_rows_reference
+=== RUN   TestAdjustFormula/for_all_worksheet_cells_with_rows_insert
+=== RUN   TestAdjustFormula/for_all_worksheet_cells_with_cols_insert
+=== RUN   TestAdjustFormula/for_cross_sheet_ref_with_rows_insert)
+=== RUN   TestAdjustFormula/for_cross_sheet_ref_with_cols_insert)
+=== RUN   TestAdjustFormula/for_cross_sheet_ref_with_chart_sheet)
+=== RUN   TestAdjustFormula/for_array_formula_cell
+--- PASS: TestAdjustFormula (0.01s)
+    --- PASS: TestAdjustFormula/for_cells_affected_directly (0.00s)
+    --- PASS: TestAdjustFormula/for_cells_affected_indirectly (0.00s)
+    --- PASS: TestAdjustFormula/for_entire_cols_rows_reference (0.00s)
+    --- PASS: TestAdjustFormula/for_all_worksheet_cells_with_rows_insert (0.00s)
+    --- PASS: TestAdjustFormula/for_all_worksheet_cells_with_cols_insert (0.00s)
+    --- PASS: TestAdjustFormula/for_cross_sheet_ref_with_rows_insert) (0.00s)
+    --- PASS: TestAdjustFormula/for_cross_sheet_ref_with_cols_insert) (0.00s)
+    --- PASS: TestAdjustFormula/for_cross_sheet_ref_with_chart_sheet) (0.00s)
+    --- PASS: TestAdjustFormula/for_array_formula_cell (0.00s)
+=== RUN   TestAdjustVolatileDeps
+--- PASS: TestAdjustVolatileDeps (0.00s)
+=== RUN   TestAdjustConditionalFormats
+=== RUN   TestAdjustConditionalFormats/for_remove_conditional_formats_column
+=== RUN   TestAdjustConditionalFormats/for_remove_conditional_formats_row
+=== RUN   TestAdjustConditionalFormats/for_adjust_conditional_formats_row
+--- PASS: TestAdjustConditionalFormats (0.00s)
+    --- PASS: TestAdjustConditionalFormats/for_remove_conditional_formats_column (0.00s)
+    --- PASS: TestAdjustConditionalFormats/for_remove_conditional_formats_row (0.00s)
+    --- PASS: TestAdjustConditionalFormats/for_adjust_conditional_formats_row (0.00s)
+=== RUN   TestAdjustDataValidations
+=== RUN   TestAdjustDataValidations/for_escaped_data_validation_rules_formula
+=== RUN   TestAdjustDataValidations/no_data_validations_on_first_sheet
+--- PASS: TestAdjustDataValidations (0.00s)
+    --- PASS: TestAdjustDataValidations/for_escaped_data_validation_rules_formula (0.00s)
+    --- PASS: TestAdjustDataValidations/no_data_validations_on_first_sheet (0.00s)
+=== RUN   TestAdjustDrawings
+--- PASS: TestAdjustDrawings (0.01s)
+=== RUN   TestAdjustDefinedNames
+--- PASS: TestAdjustDefinedNames (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_AffectedCells
+--- PASS: TestBatchUpdateAndRecalculate_AffectedCells (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_AffectedCells
+--- PASS: TestBatchSetFormulasAndRecalculate_AffectedCells (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_CrossSheetAffectedCells
+--- PASS: TestBatchUpdateAndRecalculate_CrossSheetAffectedCells (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_NoFormulaNoAffected
+--- PASS: TestBatchUpdateAndRecalculate_NoFormulaNoAffected (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateAffectedOnly
+
+=== Test BatchUpdateAndRecalculate Only Returns Affected Cells ===
+
+Updated: A1 = 50
+Affected cells count: 2
+  Sheet1!B1 = 100
+  Sheet1!C1 = 200
+
+✅ Only affected cells were recalculated!
+--- PASS: TestBatchUpdateAndRecalculateAffectedOnly (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateCrossSheet
+
+=== Test Cross-Sheet Dependencies ===
+
+Updated: Sheet1!A1 = 100
+Affected cells count: 2
+  Sheet1!B1 = 200
+  Sheet2!A1 = 300
+
+✅ Cross-sheet dependencies work correctly!
+--- PASS: TestBatchUpdateAndRecalculateCrossSheet (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateWithCachedValue
+
+=== Test Cached Values Are Returned ===
+
+Updated: A1 = 7
+Affected cells:
+  B1 = 70
+
+✅ Cached values are returned correctly!
+--- PASS: TestBatchUpdateAndRecalculateWithCachedValue (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_CrossSheet
+--- PASS: TestBatchUpdateAndRecalculate_CrossSheet (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_CrossSheetComplex
+--- PASS: TestBatchUpdateAndRecalculate_CrossSheetComplex (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_CrossSheetMultipleUpdates
+--- PASS: TestBatchUpdateAndRecalculate_CrossSheetMultipleUpdates (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate_SingleSheetStillWorks
+--- PASS: TestBatchUpdateAndRecalculate_SingleSheetStillWorks (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_CachesValues
+
+=== 设置公式并计算 ===
+受影响的单元格: 0
+
+=== 检查 XML 缓存 ===
+A1 公式: =B1*2
+A1 缓存值: 40
+A1 类型: n
+
+=== 读取缓存值 ===
+A1 = 40 (expected: 40)
+A2 = 60 (expected: 60)
+--- PASS: TestBatchSetFormulasAndRecalculate_CachesValues (0.00s)
+=== RUN   TestCachedValuePersistsAfterSave
+
+保存前: A1 = 1000
+
+=== 重新打开文件 ===
+重新打开后: A1 = 1000 (cached value)
+公式: =B1*10
+--- PASS: TestCachedValuePersistsAfterSave (0.00s)
+=== RUN   TestCacheInvalidationOnValueChange
+
+初始值: A1 = 20
+
+=== 修改依赖值 B1 ===
+更新后: A1 = 100
+XML 缓存值: 100
+--- PASS: TestCacheInvalidationOnValueChange (0.00s)
+=== RUN   TestMemoryCache
+
+=== 检查内存缓存 ===
+第一次计算: 500
+内存缓存: key='Sheet1!A1!raw=false', value='500'
+第二次计算 (使用缓存): 500
+--- PASS: TestMemoryCache (0.00s)
+=== RUN   TestCacheWithComplexFormulas
+
+=== 复杂公式缓存测试 ===
+A1 (SUM) = 60 (expected: 60)
+A2 (A1*2) = 120 (expected: 120)
+A3 (A2+A1) = 180 (expected: 180)
+✅ A1: formula='=SUM(B1:B3)', cached='60'
+✅ A2: formula='=A1*2', cached='120'
+✅ A3: formula='=A2+A1', cached='180'
+--- PASS: TestCacheWithComplexFormulas (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_CrossSheetReference
+--- PASS: TestBatchSetFormulasAndRecalculate_CrossSheetReference (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_CrossSheetChain
+--- PASS: TestBatchSetFormulasAndRecalculate_CrossSheetChain (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_MixedSheetFormulas
+--- PASS: TestBatchSetFormulasAndRecalculate_MixedSheetFormulas (0.00s)
+=== RUN   TestBatchSetFormulas
+--- PASS: TestBatchSetFormulas (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate
+--- PASS: TestBatchSetFormulasAndRecalculate (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_WithFormulaPrefix
+--- PASS: TestBatchSetFormulasAndRecalculate_WithFormulaPrefix (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_MultiSheet
+--- PASS: TestBatchSetFormulasAndRecalculate_MultiSheet (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_ComplexDependencies
+--- PASS: TestBatchSetFormulasAndRecalculate_ComplexDependencies (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_EmptyList
+--- PASS: TestBatchSetFormulasAndRecalculate_EmptyList (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_InvalidSheet
+--- PASS: TestBatchSetFormulasAndRecalculate_InvalidSheet (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_LargeDataset
+--- PASS: TestBatchSetFormulasAndRecalculate_LargeDataset (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_CalcChainUpdate
+--- PASS: TestBatchSetFormulasAndRecalculate_CalcChainUpdate (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculate_UpdateExistingFormulas
+--- PASS: TestBatchSetFormulasAndRecalculate_UpdateExistingFormulas (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateDoesNotIncludeSelf
+
+=== Test: Updated cells should NOT be in affected list ===
+
+Test 1: Update A1
+Affected cells: 2
+  - B1 = 100
+  - C1 = 140
+
+Test 2: Update A1 and A2
+Affected cells: 3
+  - B1 = 200
+  - B2 = 400
+  - C1 = 600
+
+✅ Updated cells are correctly excluded from affected list
+--- PASS: TestBatchUpdateAndRecalculateDoesNotIncludeSelf (0.00s)
+=== RUN   TestBatchSetFormulasAndRecalculateReturnsCachedValue
+
+=== Test: BatchSetFormulasAndRecalculate returns cached values ===
+
+Affected cells: 1
+  - C1 = '60'
+
+✅ All cached values are correctly returned
+--- PASS: TestBatchSetFormulasAndRecalculateReturnsCachedValue (0.00s)
+=== RUN   TestBatchSetCellValue
+--- PASS: TestBatchSetCellValue (0.00s)
+=== RUN   TestBatchSetCellValueMultiSheet
+--- PASS: TestBatchSetCellValueMultiSheet (0.00s)
+=== RUN   TestBatchSetCellValueInvalidSheet
+--- PASS: TestBatchSetCellValueInvalidSheet (0.00s)
+=== RUN   TestBatchSetCellValueInvalidCell
+--- PASS: TestBatchSetCellValueInvalidCell (0.00s)
+=== RUN   TestRecalculateSheet
+--- PASS: TestRecalculateSheet (0.00s)
+=== RUN   TestRecalculateSheetInvalidSheet
+--- PASS: TestRecalculateSheetInvalidSheet (0.00s)
+=== RUN   TestRecalculateSheetNoCalcChain
+--- PASS: TestRecalculateSheetNoCalcChain (0.00s)
+=== RUN   TestBatchUpdateAndRecalculate
+--- PASS: TestBatchUpdateAndRecalculate (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateMultiSheet
+--- PASS: TestBatchUpdateAndRecalculateMultiSheet (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateNoFormulas
+--- PASS: TestBatchUpdateAndRecalculateNoFormulas (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateComplexFormulas
+--- PASS: TestBatchUpdateAndRecalculateComplexFormulas (0.00s)
+=== RUN   TestBatchUpdateAndRecalculateLargeDataset
+--- PASS: TestBatchUpdateAndRecalculateLargeDataset (0.00s)
+=== RUN   TestCalcCellValuesPerformance
+    calc_bench_test.go:91: Preparing test data: 40000 rows x 100 cols...
+    calc_bench_test.go:114:   Prepared 5000/40000 rows (12.5%)...
+    calc_bench_test.go:114:   Prepared 10000/40000 rows (25.0%)...
+    calc_bench_test.go:114:   Prepared 15000/40000 rows (37.5%)...
+    calc_bench_test.go:114:   Prepared 20000/40000 rows (50.0%)...
+    calc_bench_test.go:114:   Prepared 25000/40000 rows (62.5%)...
+    calc_bench_test.go:114:   Prepared 30000/40000 rows (75.0%)...
+    calc_bench_test.go:114:   Prepared 35000/40000 rows (87.5%)...
+    calc_bench_test.go:114:   Prepared 40000/40000 rows (100.0%)...
+    calc_bench_test.go:119: Data preparation completed in 1.354274459s
+    calc_bench_test.go:131: Starting calculation of 4000000 cells...
+    calc_bench_test.go:141: 
+        === Performance Results ===
+    calc_bench_test.go:142: Total cells: 4000000
+    calc_bench_test.go:143: Successful calculations: 4000000
+    calc_bench_test.go:144: Failed calculations: 0
+    calc_bench_test.go:145: Total duration: 11.855075667s
+    calc_bench_test.go:146: Throughput: 337408 cells/sec
+    calc_bench_test.go:147: Average per cell: 2.963µs
+--- PASS: TestCalcCellValuesPerformance (13.39s)
+=== RUN   TestCalcFormulaValueReadOnly
+    calc_formula_readonly_test.go:24: Initial rows: 3
+    calc_formula_readonly_test.go:39: After CalcFormulaValue on Z9999:
+    calc_formula_readonly_test.go:40:   Rows: 3 (initial: 3)
+    calc_formula_readonly_test.go:41:   Result: 60
+    calc_formula_readonly_test.go:54: ✓ CalcFormulaValue is read-only (no persistent changes)
+--- PASS: TestCalcFormulaValueReadOnly (0.00s)
+=== RUN   TestCalcFormulaValueMinimalRowCreation
+    calc_formula_readonly_test.go:82: Minimal row creation test:
+    calc_formula_readonly_test.go:83:   Initial rows: 1
+    calc_formula_readonly_test.go:84:   After calculating A100: 1
+    calc_formula_readonly_test.go:85:   Rows created: 0
+--- PASS: TestCalcFormulaValueMinimalRowCreation (0.00s)
+=== RUN   TestCalcFormulaValueVsGetCellStyle
+    calc_formula_readonly_test.go:124: 
+        === Memory Footprint Comparison ===
+    calc_formula_readonly_test.go:125: Old approach (SetCellFormula + CalcCellValue):
+    calc_formula_readonly_test.go:126:   Rows created: 5000
+    calc_formula_readonly_test.go:127: 
+        New approach (CalcFormulaValue):
+    calc_formula_readonly_test.go:128:   Rows created: 2
+    calc_formula_readonly_test.go:129: 
+        Memory saved: 4998 rows
+    calc_formula_readonly_test.go:132: ✓ CalcFormulaValue uses less memory
+--- PASS: TestCalcFormulaValueVsGetCellStyle (0.00s)
+=== RUN   TestCalcFormulaValueBatchReadOnly
+    calc_formula_readonly_test.go:172: 
+        === Batch Calculation Test ===
+    calc_formula_readonly_test.go:173: Calculated 100 formulas in 727.583µs
+    calc_formula_readonly_test.go:174: Initial rows: 10
+    calc_formula_readonly_test.go:175: After batch: 10
+    calc_formula_readonly_test.go:176: Rows created: 0
+    calc_formula_readonly_test.go:183: ✓ Batch calculation completed
+--- PASS: TestCalcFormulaValueBatchReadOnly (0.00s)
+=== RUN   TestCalcFormulaValueReadOnlyPerformance
+    calc_formula_readonly_test.go:215: 
+        === Performance Test ===
+    calc_formula_readonly_test.go:216: Iterations: 1000
+    calc_formula_readonly_test.go:217: Duration: 8.002125ms
+    calc_formula_readonly_test.go:218: Avg per call: 8.002µs
+    calc_formula_readonly_test.go:219: Final row count: 100
+    calc_formula_readonly_test.go:220: Throughput: 124967 calculations/sec
+--- PASS: TestCalcFormulaValueReadOnlyPerformance (0.01s)
+=== RUN   TestCalcFormulaValue
+=== RUN   TestCalcFormulaValue/Calculate_without_modifying_cell
+=== RUN   TestCalcFormulaValue/Calculate_on_cell_with_existing_formula
+=== RUN   TestCalcFormulaValue/Multiple_calculations_on_same_cell
+--- PASS: TestCalcFormulaValue (0.00s)
+    --- PASS: TestCalcFormulaValue/Calculate_without_modifying_cell (0.00s)
+    --- PASS: TestCalcFormulaValue/Calculate_on_cell_with_existing_formula (0.00s)
+    --- PASS: TestCalcFormulaValue/Multiple_calculations_on_same_cell (0.00s)
+=== RUN   TestCalcFormulasValues
+--- PASS: TestCalcFormulasValues (0.00s)
+=== RUN   TestCalcFormulaValuePerformance
+    calc_formula_test.go:166: 
+        === Test 1: SetCellFormula + CalcCellValue ===
+    calc_formula_test.go:174: Iterations: 1000
+    calc_formula_test.go:175: Duration: 157.470208ms
+    calc_formula_test.go:176: Avg per iteration: 157.47µs
+    calc_formula_test.go:179: 
+        === Test 2: CalcFormulaValue ===
+    calc_formula_test.go:186: Iterations: 1000
+    calc_formula_test.go:187: Duration: 5.101542ms
+    calc_formula_test.go:188: Avg per iteration: 5.101µs
+    calc_formula_test.go:191: 
+        === Performance Summary ===
+    calc_formula_test.go:192: Traditional approach: 157.470208ms
+    calc_formula_test.go:193: CalcFormulaValue:     5.101542ms
+    calc_formula_test.go:195: Speedup: 30.87x faster
+--- PASS: TestCalcFormulaValuePerformance (0.16s)
+=== RUN   TestCalcFormulaValueCacheNotCleared
+    calc_formula_test.go:226: First calc (cold): 25.875µs, result: 30
+    calc_formula_test.go:227: Second calc (hot): 125ns, result: 30
+    calc_formula_test.go:237: Third calc (after CalcFormulaValue): 125ns, result: 30
+    calc_formula_test.go:243: ✓ Cache preserved after CalcFormulaValue
+--- PASS: TestCalcFormulaValueCacheNotCleared (0.00s)
+=== RUN   TestCalcFormulaValueErrorHandling
+=== RUN   TestCalcFormulaValueErrorHandling/Invalid_formula
+    calc_formula_test.go:260: Result: #VALUE!, Error: not support INVALID function
+=== RUN   TestCalcFormulaValueErrorHandling/Invalid_sheet
+=== RUN   TestCalcFormulaValueErrorHandling/Invalid_cell_reference
+--- PASS: TestCalcFormulaValueErrorHandling (0.00s)
+    --- PASS: TestCalcFormulaValueErrorHandling/Invalid_formula (0.00s)
+    --- PASS: TestCalcFormulaValueErrorHandling/Invalid_sheet (0.00s)
+    --- PASS: TestCalcFormulaValueErrorHandling/Invalid_cell_reference (0.00s)
+=== RUN   TestCalcFormulasValuesWithErrors
+    calc_formula_test.go:307: Successful calculations: 2
+    calc_formula_test.go:308: Error: failed to calculate A2: not support INVALID function; failed to calculate A4: not support NONEXIST function
+--- PASS: TestCalcFormulasValuesWithErrors (0.00s)
+=== RUN   TestCalcCellValuesOptimizationComparison
+=== RUN   TestCalcCellValuesOptimizationComparison/Medium_(5k_x_50)
+    calc_optimization_test.go:32: Preparing test data: 5000 rows x 50 cols...
+    calc_optimization_test.go:66: 
+        === Test 1: Original CalcCellValues ===
+    calc_optimization_test.go:74: Duration: 584.593708ms
+    calc_optimization_test.go:75: Throughput: 427647 cells/sec
+    calc_optimization_test.go:76: Successful: 250000/250000
+    calc_optimization_test.go:79: 
+        === Test 2: Optimized CalcCellValues (strings.Builder) ===
+    calc_optimization_test.go:90: Duration: 584.88ms
+    calc_optimization_test.go:91: Throughput: 427438 cells/sec
+    calc_optimization_test.go:92: Successful: 250000/250000
+    calc_optimization_test.go:93: Speedup vs original: 1.00x
+    calc_optimization_test.go:96: 
+        === Test 3: Concurrent CalcCellValues ===
+    calc_optimization_test.go:107: Duration: 805.628125ms
+    calc_optimization_test.go:108: Throughput: 310317 cells/sec
+    calc_optimization_test.go:109: Successful: 250000/250000
+    calc_optimization_test.go:110: Speedup vs original: 0.73x
+    calc_optimization_test.go:113: 
+        === Test 4: Concurrent CalcCellValues (Hot Cache) ===
+    calc_optimization_test.go:122: Duration: 135.824833ms
+    calc_optimization_test.go:123: Throughput: 1840606 cells/sec
+    calc_optimization_test.go:124: Successful: 250000/250000
+    calc_optimization_test.go:125: Speedup vs original: 4.30x
+    calc_optimization_test.go:128: 
+        === Performance Summary ===
+    calc_optimization_test.go:129: Total cells: 250000
+    calc_optimization_test.go:130: 
+    calc_optimization_test.go:131: Original (cold cache):     584.593708ms (baseline)
+    calc_optimization_test.go:132: Optimized (cold cache):    584.88ms (1.00x)
+    calc_optimization_test.go:133: Concurrent (cold cache):   805.628125ms (0.73x)
+    calc_optimization_test.go:134: Concurrent (hot cache):    135.824833ms (4.30x)
+    calc_optimization_test.go:135: 
+    calc_optimization_test.go:136: Best improvement: Concurrent with hot cache is 4.30x faster
+=== RUN   TestCalcCellValuesOptimizationComparison/Large_(10k_x_100)
+    calc_optimization_test.go:32: Preparing test data: 10000 rows x 100 cols...
+    calc_optimization_test.go:66: 
+        === Test 1: Original CalcCellValues ===
+    calc_optimization_test.go:74: Duration: 2.707746125s
+    calc_optimization_test.go:75: Throughput: 369311 cells/sec
+    calc_optimization_test.go:76: Successful: 1000000/1000000
+    calc_optimization_test.go:79: 
+        === Test 2: Optimized CalcCellValues (strings.Builder) ===
+    calc_optimization_test.go:90: Duration: 2.689196166s
+    calc_optimization_test.go:91: Throughput: 371858 cells/sec
+    calc_optimization_test.go:92: Successful: 1000000/1000000
+    calc_optimization_test.go:93: Speedup vs original: 1.01x
+    calc_optimization_test.go:96: 
+        === Test 3: Concurrent CalcCellValues ===
+    calc_optimization_test.go:107: Duration: 3.666396958s
+    calc_optimization_test.go:108: Throughput: 272747 cells/sec
+    calc_optimization_test.go:109: Successful: 1000000/1000000
+    calc_optimization_test.go:110: Speedup vs original: 0.74x
+    calc_optimization_test.go:113: 
+        === Test 4: Concurrent CalcCellValues (Hot Cache) ===
+    calc_optimization_test.go:122: Duration: 594.499041ms
+    calc_optimization_test.go:123: Throughput: 1682088 cells/sec
+    calc_optimization_test.go:124: Successful: 1000000/1000000
+    calc_optimization_test.go:125: Speedup vs original: 4.55x
+    calc_optimization_test.go:128: 
+        === Performance Summary ===
+    calc_optimization_test.go:129: Total cells: 1000000
+    calc_optimization_test.go:130: 
+    calc_optimization_test.go:131: Original (cold cache):     2.707746125s (baseline)
+    calc_optimization_test.go:132: Optimized (cold cache):    2.689196166s (1.01x)
+    calc_optimization_test.go:133: Concurrent (cold cache):   3.666396958s (0.74x)
+    calc_optimization_test.go:134: Concurrent (hot cache):    594.499041ms (4.55x)
+    calc_optimization_test.go:135: 
+    calc_optimization_test.go:136: Best improvement: Concurrent with hot cache is 4.55x faster
+=== RUN   TestCalcCellValuesOptimizationComparison/Extra_Large_(20k_x_100)
+    calc_optimization_test.go:32: Preparing test data: 20000 rows x 100 cols...
+    calc_optimization_test.go:66: 
+        === Test 1: Original CalcCellValues ===
+    calc_optimization_test.go:74: Duration: 5.867882667s
+    calc_optimization_test.go:75: Throughput: 340838 cells/sec
+    calc_optimization_test.go:76: Successful: 2000000/2000000
+    calc_optimization_test.go:79: 
+        === Test 2: Optimized CalcCellValues (strings.Builder) ===
+    calc_optimization_test.go:90: Duration: 5.668420958s
+    calc_optimization_test.go:91: Throughput: 352832 cells/sec
+    calc_optimization_test.go:92: Successful: 2000000/2000000
+    calc_optimization_test.go:93: Speedup vs original: 1.04x
+    calc_optimization_test.go:96: 
+        === Test 3: Concurrent CalcCellValues ===
+    calc_optimization_test.go:107: Duration: 7.62764s
+    calc_optimization_test.go:108: Throughput: 262204 cells/sec
+    calc_optimization_test.go:109: Successful: 2000000/2000000
+    calc_optimization_test.go:110: Speedup vs original: 0.77x
+    calc_optimization_test.go:113: 
+        === Test 4: Concurrent CalcCellValues (Hot Cache) ===
+    calc_optimization_test.go:122: Duration: 1.203160208s
+    calc_optimization_test.go:123: Throughput: 1662289 cells/sec
+    calc_optimization_test.go:124: Successful: 2000000/2000000
+    calc_optimization_test.go:125: Speedup vs original: 4.88x
+    calc_optimization_test.go:128: 
+        === Performance Summary ===
+    calc_optimization_test.go:129: Total cells: 2000000
+    calc_optimization_test.go:130: 
+    calc_optimization_test.go:131: Original (cold cache):     5.867882667s (baseline)
+    calc_optimization_test.go:132: Optimized (cold cache):    5.668420958s (1.04x)
+    calc_optimization_test.go:133: Concurrent (cold cache):   7.62764s (0.77x)
+    calc_optimization_test.go:134: Concurrent (hot cache):    1.203160208s (4.88x)
+    calc_optimization_test.go:135: 
+    calc_optimization_test.go:136: Best improvement: Concurrent with hot cache is 4.88x faster
+--- PASS: TestCalcCellValuesOptimizationComparison (33.35s)
+    --- PASS: TestCalcCellValuesOptimizationComparison/Medium_(5k_x_50) (2.20s)
+    --- PASS: TestCalcCellValuesOptimizationComparison/Large_(10k_x_100) (10.03s)
+    --- PASS: TestCalcCellValuesOptimizationComparison/Extra_Large_(20k_x_100) (21.12s)
+=== RUN   TestCalcCellValuesPerformanceScaling
+=== RUN   TestCalcCellValuesPerformanceScaling/Small_(1k_x_10)
+    calc_performance_test.go:33: Preparing test data: 1000 rows x 10 cols...
+    calc_performance_test.go:57: Data preparation: 3.087708ms
+    calc_performance_test.go:92: 
+        === Performance Results ===
+    calc_performance_test.go:93: Total cells: 10000
+    calc_performance_test.go:94: Successful: 10000, Failed: 0
+    calc_performance_test.go:95: 
+    calc_performance_test.go:96: Batch CalcCellValues:
+    calc_performance_test.go:97:   Duration: 18.542292ms
+    calc_performance_test.go:98:   Throughput: 539308 cells/sec
+    calc_performance_test.go:99:   Avg per cell: 1.854µs
+    calc_performance_test.go:100: 
+    calc_performance_test.go:101: Individual CalcCellValue (projected from 1000 samples):
+    calc_performance_test.go:102:   Projected duration: 1.19792ms
+    calc_performance_test.go:103:   Projected throughput: 8347803 cells/sec
+    calc_performance_test.go:104: 
+    calc_performance_test.go:105: Speedup: 0.06x faster with batch
+=== RUN   TestCalcCellValuesPerformanceScaling/Medium_(5k_x_50)
+    calc_performance_test.go:33: Preparing test data: 5000 rows x 50 cols...
+    calc_performance_test.go:57: Data preparation: 92.338958ms
+    calc_performance_test.go:92: 
+        === Performance Results ===
+    calc_performance_test.go:93: Total cells: 250000
+    calc_performance_test.go:94: Successful: 250000, Failed: 0
+    calc_performance_test.go:95: 
+    calc_performance_test.go:96: Batch CalcCellValues:
+    calc_performance_test.go:97:   Duration: 616.884834ms
+    calc_performance_test.go:98:   Throughput: 405262 cells/sec
+    calc_performance_test.go:99:   Avg per cell: 2.467µs
+    calc_performance_test.go:100: 
+    calc_performance_test.go:101: Individual CalcCellValue (projected from 1000 samples):
+    calc_performance_test.go:102:   Projected duration: 53.9375ms
+    calc_performance_test.go:103:   Projected throughput: 4634994 cells/sec
+    calc_performance_test.go:104: 
+    calc_performance_test.go:105: Speedup: 0.09x faster with batch
+=== RUN   TestCalcCellValuesPerformanceScaling/Large_(10k_x_100)
+    calc_performance_test.go:33: Preparing test data: 10000 rows x 100 cols...
+    calc_performance_test.go:57: Data preparation: 331.200542ms
+    calc_performance_test.go:92: 
+        === Performance Results ===
+    calc_performance_test.go:93: Total cells: 1000000
+    calc_performance_test.go:94: Successful: 1000000, Failed: 0
+    calc_performance_test.go:95: 
+    calc_performance_test.go:96: Batch CalcCellValues:
+    calc_performance_test.go:97:   Duration: 2.771954042s
+    calc_performance_test.go:98:   Throughput: 360756 cells/sec
+    calc_performance_test.go:99:   Avg per cell: 2.771µs
+    calc_performance_test.go:100: 
+    calc_performance_test.go:101: Individual CalcCellValue (projected from 1000 samples):
+    calc_performance_test.go:102:   Projected duration: 288.25ms
+    calc_performance_test.go:103:   Projected throughput: 3469211 cells/sec
+    calc_performance_test.go:104: 
+    calc_performance_test.go:105: Speedup: 0.10x faster with batch
+=== RUN   TestCalcCellValuesPerformanceScaling/Extra_Large_(40k_x_100)
+    calc_performance_test.go:33: Preparing test data: 40000 rows x 100 cols...
+    calc_performance_test.go:57: Data preparation: 1.377396416s
+    calc_performance_test.go:92: 
+        === Performance Results ===
+    calc_performance_test.go:93: Total cells: 4000000
+    calc_performance_test.go:94: Successful: 4000000, Failed: 0
+    calc_performance_test.go:95: 
+    calc_performance_test.go:96: Batch CalcCellValues:
+    calc_performance_test.go:97:   Duration: 12.126237125s
+    calc_performance_test.go:98:   Throughput: 329863 cells/sec
+    calc_performance_test.go:99:   Avg per cell: 3.031µs
+    calc_performance_test.go:100: 
+    calc_performance_test.go:101: Individual CalcCellValue (projected from 1000 samples):
+    calc_performance_test.go:102:   Projected duration: 1.348832s
+    calc_performance_test.go:103:   Projected throughput: 2965529 cells/sec
+    calc_performance_test.go:104: 
+    calc_performance_test.go:105: Speedup: 0.11x faster with batch
+--- PASS: TestCalcCellValuesPerformanceScaling (17.56s)
+    --- PASS: TestCalcCellValuesPerformanceScaling/Small_(1k_x_10) (0.02s)
+    --- PASS: TestCalcCellValuesPerformanceScaling/Medium_(5k_x_50) (0.73s)
+    --- PASS: TestCalcCellValuesPerformanceScaling/Large_(10k_x_100) (3.14s)
+    --- PASS: TestCalcCellValuesPerformanceScaling/Extra_Large_(40k_x_100) (13.67s)
+=== RUN   TestCalcCellValueReadOnlyOptimization
+    calc_readonly_optimization_test.go:23: Initial rows: 2
+    calc_readonly_optimization_test.go:40: After CalcCellValue on Z9999:
+    calc_readonly_optimization_test.go:41:   Rows: 2 (initial: 2)
+    calc_readonly_optimization_test.go:47: ✓ CalcCellValue is read-only optimized
+--- PASS: TestCalcCellValueReadOnlyOptimization (0.00s)
+=== RUN   TestCalcCellValueWithFormulaReadOnly
+    calc_readonly_optimization_test.go:84: Rows before: 3, after: 3
+    calc_readonly_optimization_test.go:90: ✓ Formula calculation is read-only optimized
+--- PASS: TestCalcCellValueWithFormulaReadOnly (0.00s)
+=== RUN   TestCalcCellValuePerformanceComparison
+    calc_readonly_optimization_test.go:120: 
+        === CalcCellValue Performance (Read-Only Optimized) ===
+    calc_readonly_optimization_test.go:121: Iterations: 1000
+    calc_readonly_optimization_test.go:122: Duration: 921.792µs
+    calc_readonly_optimization_test.go:123: Avg per call: 921ns
+    calc_readonly_optimization_test.go:124: Initial rows: 3
+    calc_readonly_optimization_test.go:125: Final rows: 3
+    calc_readonly_optimization_test.go:126: Rows created: 0
+    calc_readonly_optimization_test.go:131: ✓ Minimal row creation: only 0 rows
+--- PASS: TestCalcCellValuePerformanceComparison (0.00s)
+=== RUN   TestCalcCellValueMemoryFootprint
+    calc_readonly_optimization_test.go:188: 
+        === Memory Footprint Test ===
+    calc_readonly_optimization_test.go:189: Initial rows: 1
+    calc_readonly_optimization_test.go:190: Final rows: 1
+    calc_readonly_optimization_test.go:191: Rows created: 0
+    calc_readonly_optimization_test.go:192: Far cells accessed: 100 (up to Z10000)
+    calc_readonly_optimization_test.go:197: ✓ Memory footprint minimized
+--- PASS: TestCalcCellValueMemoryFootprint (0.00s)
+=== RUN   TestCalcCellValue
+--- PASS: TestCalcCellValue (1.21s)
+=== RUN   TestCalcWithDefinedName
+--- PASS: TestCalcWithDefinedName (0.00s)
+=== RUN   TestCalcISBLANK
+--- PASS: TestCalcISBLANK (0.00s)
+=== RUN   TestCalcAND
+--- PASS: TestCalcAND (0.00s)
+=== RUN   TestCalcOR
+--- PASS: TestCalcOR (0.00s)
+=== RUN   TestCalcDet
+--- PASS: TestCalcDet (0.00s)
+=== RUN   TestCalcToBool
+--- PASS: TestCalcToBool (0.00s)
+=== RUN   TestCalcToList
+--- PASS: TestCalcToList (0.00s)
+=== RUN   TestCalcCompareFormulaArg
+--- PASS: TestCalcCompareFormulaArg (0.00s)
+=== RUN   TestCalcCompareFormulaArgMatrix
+--- PASS: TestCalcCompareFormulaArgMatrix (0.00s)
+=== RUN   TestCalcANCHORARRAY
+--- PASS: TestCalcANCHORARRAY (0.00s)
+=== RUN   TestCalcArrayFormula
+=== RUN   TestCalcArrayFormula/matrix_multiplication
+=== RUN   TestCalcArrayFormula/matrix_multiplication_with_defined_name
+=== RUN   TestCalcArrayFormula/columm_multiplication
+=== RUN   TestCalcArrayFormula/row_multiplication
+--- PASS: TestCalcArrayFormula (0.71s)
+    --- PASS: TestCalcArrayFormula/matrix_multiplication (0.00s)
+    --- PASS: TestCalcArrayFormula/matrix_multiplication_with_defined_name (0.00s)
+    --- PASS: TestCalcArrayFormula/columm_multiplication (0.71s)
+    --- PASS: TestCalcArrayFormula/row_multiplication (0.00s)
+=== RUN   TestCalcTRANSPOSE
+--- PASS: TestCalcTRANSPOSE (0.00s)
+=== RUN   TestCalcVLOOKUP
+--- PASS: TestCalcVLOOKUP (0.00s)
+=== RUN   TestCalcBoolean
+--- PASS: TestCalcBoolean (0.00s)
+=== RUN   TestCalcMAXMIN
+--- PASS: TestCalcMAXMIN (0.00s)
+=== RUN   TestCalcAVERAGEIF
+--- PASS: TestCalcAVERAGEIF (0.00s)
+=== RUN   TestCalcCOVAR
+--- PASS: TestCalcCOVAR (0.00s)
+=== RUN   TestCalcUniqueExactlyOnce
+--- PASS: TestCalcUniqueExactlyOnce (0.00s)
+=== RUN   TestCalcUniqueMultiColumn
+--- PASS: TestCalcUniqueMultiColumn (0.00s)
+=== RUN   TestCalcUniqueErrors
+--- PASS: TestCalcUniqueErrors (0.00s)
+=== RUN   TestTransposeFormulaArgsMatrix
+--- PASS: TestTransposeFormulaArgsMatrix (0.00s)
+=== RUN   TestGetFormulaUniqueArgs
+--- PASS: TestGetFormulaUniqueArgs (0.00s)
+=== RUN   TestCalcFILTER
+--- PASS: TestCalcFILTER (0.00s)
+=== RUN   TestCalcFILTERErrors
+--- PASS: TestCalcFILTERErrors (0.00s)
+=== RUN   TestCalcFILTERWithExpression
+--- PASS: TestCalcFILTERWithExpression (0.00s)
+=== RUN   TestCoerceToBoolean
+=== RUN   TestCoerceToBoolean/true_boolean
+=== RUN   TestCoerceToBoolean/false_boolean
+=== RUN   TestCoerceToBoolean/non-zero_number
+=== RUN   TestCoerceToBoolean/zero_number
+=== RUN   TestCoerceToBoolean/negative_number
+=== RUN   TestCoerceToBoolean/TRUE_string
+=== RUN   TestCoerceToBoolean/true_string_lowercase
+=== RUN   TestCoerceToBoolean/FALSE_string
+=== RUN   TestCoerceToBoolean/empty_string
+=== RUN   TestCoerceToBoolean/other_string
+=== RUN   TestCoerceToBoolean/empty_arg
+--- PASS: TestCoerceToBoolean (0.00s)
+    --- PASS: TestCoerceToBoolean/true_boolean (0.00s)
+    --- PASS: TestCoerceToBoolean/false_boolean (0.00s)
+    --- PASS: TestCoerceToBoolean/non-zero_number (0.00s)
+    --- PASS: TestCoerceToBoolean/zero_number (0.00s)
+    --- PASS: TestCoerceToBoolean/negative_number (0.00s)
+    --- PASS: TestCoerceToBoolean/TRUE_string (0.00s)
+    --- PASS: TestCoerceToBoolean/true_string_lowercase (0.00s)
+    --- PASS: TestCoerceToBoolean/FALSE_string (0.00s)
+    --- PASS: TestCoerceToBoolean/empty_string (0.00s)
+    --- PASS: TestCoerceToBoolean/other_string (0.00s)
+    --- PASS: TestCoerceToBoolean/empty_arg (0.00s)
+=== RUN   TestCalcDatabase
+--- PASS: TestCalcDatabase (0.00s)
+=== RUN   TestCalcDBCS
+--- PASS: TestCalcDBCS (0.00s)
+=== RUN   TestCalcFORMULATEXT
+--- PASS: TestCalcFORMULATEXT (0.00s)
+=== RUN   TestCalcGROWTHandTREND
+--- PASS: TestCalcGROWTHandTREND (0.00s)
+=== RUN   TestCalcHLOOKUP
+--- PASS: TestCalcHLOOKUP (0.00s)
+=== RUN   TestCalcCHITESTandCHISQdotTEST
+--- PASS: TestCalcCHITESTandCHISQdotTEST (0.00s)
+=== RUN   TestCalcFTEST
+--- PASS: TestCalcFTEST (0.00s)
+=== RUN   TestCalcIRR
+--- PASS: TestCalcIRR (0.00s)
+=== RUN   TestCalcMAXMINIFS
+--- PASS: TestCalcMAXMINIFS (0.00s)
+=== RUN   TestCalcMIRR
+--- PASS: TestCalcMIRR (0.00s)
+=== RUN   TestCalcSUMIFSAndAVERAGEIFS
+--- PASS: TestCalcSUMIFSAndAVERAGEIFS (0.00s)
+=== RUN   TestCalcXIRR
+--- PASS: TestCalcXIRR (0.00s)
+=== RUN   TestCalcXLOOKUP
+--- PASS: TestCalcXLOOKUP (0.00s)
+=== RUN   TestCalcXNPV
+--- PASS: TestCalcXNPV (0.00s)
+=== RUN   TestCalcMATCH
+--- PASS: TestCalcMATCH (0.00s)
+=== RUN   TestCalcISFORMULA
+--- PASS: TestCalcISFORMULA (0.00s)
+=== RUN   TestCalcMODE
+--- PASS: TestCalcMODE (0.00s)
+=== RUN   TestCalcPEARSON
+--- PASS: TestCalcPEARSON (0.00s)
+=== RUN   TestCalcPROB
+--- PASS: TestCalcPROB (0.00s)
+=== RUN   TestCalcRSQ
+--- PASS: TestCalcRSQ (0.00s)
+=== RUN   TestCalcSLOP
+--- PASS: TestCalcSLOP (0.00s)
+=== RUN   TestCalcSHEET
+--- PASS: TestCalcSHEET (0.00s)
+=== RUN   TestCalcSHEETS
+--- PASS: TestCalcSHEETS (0.00s)
+=== RUN   TestCalcSTEY
+--- PASS: TestCalcSTEY (0.00s)
+=== RUN   TestCalcTTEST
+--- PASS: TestCalcTTEST (0.00s)
+=== RUN   TestCalcNETWORKDAYSandWORKDAY
+--- PASS: TestCalcNETWORKDAYSandWORKDAY (0.00s)
+=== RUN   TestCalcZTEST
+--- PASS: TestCalcZTEST (0.00s)
+=== RUN   TestStrToDate
+--- PASS: TestStrToDate (0.00s)
+=== RUN   TestGetYearDays
+--- PASS: TestGetYearDays (0.00s)
+=== RUN   TestCalcGetBetaHelperContFrac
+--- PASS: TestCalcGetBetaHelperContFrac (0.00s)
+=== RUN   TestCalcGetBetaDistPDF
+--- PASS: TestCalcGetBetaDistPDF (0.00s)
+=== RUN   TestCalcD1mach
+--- PASS: TestCalcD1mach (0.00s)
+=== RUN   TestCalcChebyshevInit
+--- PASS: TestCalcChebyshevInit (0.00s)
+=== RUN   TestCalcChebyshevEval
+--- PASS: TestCalcChebyshevEval (0.00s)
+=== RUN   TestCalcLgammacor
+--- PASS: TestCalcLgammacor (0.00s)
+=== RUN   TestCalcLgammaerr
+--- PASS: TestCalcLgammaerr (0.00s)
+=== RUN   TestCalcLogBeta
+--- PASS: TestCalcLogBeta (0.00s)
+=== RUN   TestCalcBetainvProbIterator
+--- PASS: TestCalcBetainvProbIterator (0.00s)
+=== RUN   TestCalcRangeResolver
+--- PASS: TestCalcRangeResolver (0.00s)
+=== RUN   TestCalcBahttextAppendDigit
+--- PASS: TestCalcBahttextAppendDigit (0.00s)
+=== RUN   TestNestedFunctionsWithOperators
+--- PASS: TestNestedFunctionsWithOperators (0.00s)
+=== RUN   TestFormulaRawCellValueOption
+--- PASS: TestFormulaRawCellValueOption (0.00s)
+=== RUN   TestFormulaArgToToken
+--- PASS: TestFormulaArgToToken (0.00s)
+=== RUN   TestPrepareTrendGrowth
+--- PASS: TestPrepareTrendGrowth (0.00s)
+=== RUN   TestCalcColRowQRDecomposition
+--- PASS: TestCalcColRowQRDecomposition (0.00s)
+=== RUN   TestCalcCellResolver
+--- PASS: TestCalcCellResolver (0.00s)
+=== RUN   TestEvalInfixExp
+--- PASS: TestEvalInfixExp (0.00s)
+=== RUN   TestParseToken
+--- PASS: TestParseToken (0.00s)
+=== RUN   TestCalcCellValueCache
+=== RUN   TestCalcCellValueCache/for_calc_call_value_with_cache
+=== RUN   TestCalcCellValueCache/for_calc_call_value_with_multiple_dependent_cells
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellValue
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellInt
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellUint
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellFloat
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellStr
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellBool
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellDefault
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellFormula
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellHyperLink
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetCellRichText
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetSheetRow
+=== RUN   TestCalcCellValueCache/for_clear_calculation_cache/SetSheetCol
+--- PASS: TestCalcCellValueCache (0.00s)
+    --- PASS: TestCalcCellValueCache/for_calc_call_value_with_cache (0.00s)
+    --- PASS: TestCalcCellValueCache/for_calc_call_value_with_multiple_dependent_cells (0.00s)
+    --- PASS: TestCalcCellValueCache/for_clear_calculation_cache (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellValue (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellInt (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellUint (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellFloat (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellStr (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellBool (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellDefault (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellFormula (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellHyperLink (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetCellRichText (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetSheetRow (0.00s)
+        --- PASS: TestCalcCellValueCache/for_clear_calculation_cache/SetSheetCol (0.00s)
+=== RUN   TestCalcLookupCol
+--- PASS: TestCalcLookupCol (0.00s)
+=== RUN   TestCalcLookupLinearSearch
+--- PASS: TestCalcLookupLinearSearch (0.00s)
+=== RUN   TestCalcMatchMatrix
+--- PASS: TestCalcMatchMatrix (0.00s)
+=== RUN   TestCalcTrendGrowthMultipleRegressionPart2
+--- PASS: TestCalcTrendGrowthMultipleRegressionPart2 (0.00s)
+=== RUN   TestCalcTrendGrowthRegression
+--- PASS: TestCalcTrendGrowthRegression (0.00s)
+=== RUN   TestCalcOFFSET
+--- PASS: TestCalcOFFSET (0.00s)
+=== RUN   TestCalcSORT
+--- PASS: TestCalcSORT (0.00s)
+=== RUN   TestCalcOFFSETWithSORT
+--- PASS: TestCalcOFFSETWithSORT (0.00s)
+=== RUN   TestCalcTEXTSPLIT
+--- PASS: TestCalcTEXTSPLIT (0.00s)
+=== RUN   TestCalcMAXCrossSheetFormulaCells
+--- PASS: TestCalcMAXCrossSheetFormulaCells (0.00s)
+=== RUN   TestCalcMAXCrossSheetDateFormulas
+--- PASS: TestCalcMAXCrossSheetDateFormulas (0.00s)
+=== RUN   TestUpdateCellAndRecalculate
+--- PASS: TestUpdateCellAndRecalculate (0.00s)
+=== RUN   TestUpdateCellAndRecalculateWithoutCalcChain
+--- PASS: TestUpdateCellAndRecalculateWithoutCalcChain (0.00s)
+=== RUN   TestUpdateCellAndRecalculateComplexChain
+--- PASS: TestUpdateCellAndRecalculateComplexChain (0.00s)
+=== RUN   TestUpdateCellAndRecalculateNonExistentCell
+--- PASS: TestUpdateCellAndRecalculateNonExistentCell (0.00s)
+=== RUN   TestUpdateCellAndRecalculateInvalidSheet
+--- PASS: TestUpdateCellAndRecalculateInvalidSheet (0.00s)
+=== RUN   TestUpdateCellAndRecalculateInvalidCell
+--- PASS: TestUpdateCellAndRecalculateInvalidCell (0.00s)
+=== RUN   TestUpdateCellAndRecalculateMultiSheet
+--- PASS: TestUpdateCellAndRecalculateMultiSheet (0.00s)
+=== RUN   TestUpdateCellAndRecalculateWithStrings
+--- PASS: TestUpdateCellAndRecalculateWithStrings (0.00s)
+=== RUN   TestUpdateCellAndRecalculateWithBooleans
+--- PASS: TestUpdateCellAndRecalculateWithBooleans (0.00s)
+=== RUN   TestUpdateCellAndRecalculatePerformance
+--- PASS: TestUpdateCellAndRecalculatePerformance (0.01s)
+=== RUN   TestCalcChainReader
+--- PASS: TestCalcChainReader (0.00s)
+=== RUN   TestDeleteCalcChain
+--- PASS: TestDeleteCalcChain (0.00s)
+=== RUN   TestUpdateCellCache
+--- PASS: TestUpdateCellCache (0.00s)
+=== RUN   TestUpdateCellCacheWithCalcChain
+--- PASS: TestUpdateCellCacheWithCalcChain (0.00s)
+=== RUN   TestFindCellInCalcChain
+--- PASS: TestFindCellInCalcChain (0.00s)
+=== RUN   TestClearCellCache
+--- PASS: TestClearCellCache (0.00s)
+=== RUN   TestUpdateCellCachePerformance
+--- PASS: TestUpdateCellCachePerformance (0.00s)
+=== RUN   TestSetCellValuesBatchWithFormulasPerformance
+=== RUN   TestSetCellValuesBatchWithFormulasPerformance/Medium_(5k_x_50)
+    cell_batch_formula_test.go:31: Setup: 5000 rows x 50 cols (50% formulas, 50% values)
+    cell_batch_formula_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_formula_test.go:62: Updated 125000 values 3 times
+    cell_batch_formula_test.go:63: Total operations: 375000
+    cell_batch_formula_test.go:64: Duration: 109.09875ms
+    cell_batch_formula_test.go:65: Throughput: 3437253 ops/sec
+    cell_batch_formula_test.go:68: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_formula_test.go:95: Updated 125000 values 3 times
+    cell_batch_formula_test.go:96: Total operations: 375000
+    cell_batch_formula_test.go:97: Duration: 125.229584ms
+    cell_batch_formula_test.go:98: Throughput: 2994500 ops/sec
+    cell_batch_formula_test.go:101: 
+        === Performance Summary ===
+    cell_batch_formula_test.go:102: SetCellValue (loop): 109.09875ms
+    cell_batch_formula_test.go:103: SetCellValues (batch): 125.229584ms
+    cell_batch_formula_test.go:104: Speedup: 0.87x faster
+    cell_batch_formula_test.go:107: WARNING: Batch is slower. This might be expected for small datasets without formulas.
+=== RUN   TestSetCellValuesBatchWithFormulasPerformance/Large_(10k_x_100)
+    cell_batch_formula_test.go:31: Setup: 10000 rows x 100 cols (50% formulas, 50% values)
+    cell_batch_formula_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_formula_test.go:62: Updated 500000 values 3 times
+    cell_batch_formula_test.go:63: Total operations: 1500000
+    cell_batch_formula_test.go:64: Duration: 405.84225ms
+    cell_batch_formula_test.go:65: Throughput: 3696017 ops/sec
+    cell_batch_formula_test.go:68: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_formula_test.go:95: Updated 500000 values 3 times
+    cell_batch_formula_test.go:96: Total operations: 1500000
+    cell_batch_formula_test.go:97: Duration: 620.92725ms
+    cell_batch_formula_test.go:98: Throughput: 2415742 ops/sec
+    cell_batch_formula_test.go:101: 
+        === Performance Summary ===
+    cell_batch_formula_test.go:102: SetCellValue (loop): 405.84225ms
+    cell_batch_formula_test.go:103: SetCellValues (batch): 620.92725ms
+    cell_batch_formula_test.go:104: Speedup: 0.65x faster
+    cell_batch_formula_test.go:107: WARNING: Batch is slower. This might be expected for small datasets without formulas.
+--- PASS: TestSetCellValuesBatchWithFormulasPerformance (1.89s)
+    --- PASS: TestSetCellValuesBatchWithFormulasPerformance/Medium_(5k_x_50) (0.36s)
+    --- PASS: TestSetCellValuesBatchWithFormulasPerformance/Large_(10k_x_100) (1.53s)
+=== RUN   TestSetCellValuesRealWorldScenario
+    cell_batch_realworld_test.go:17: Real-world scenario: Replace 500000 formulas with values
+    cell_batch_realworld_test.go:39: Setup complete: 499900 cells with formulas
+    cell_batch_realworld_test.go:42: 
+        === Test 1: Replace Formulas with SetCellValue Loop ===
+    cell_batch_realworld_test.go:70: Replaced 499900 formulas
+    cell_batch_realworld_test.go:71: Duration: 509.83675ms
+    cell_batch_realworld_test.go:72: Throughput: 980510 ops/sec
+    cell_batch_realworld_test.go:75: 
+        === Test 2: Replace Formulas with SetCellValues Batch ===
+    cell_batch_realworld_test.go:107: Replaced 499900 formulas
+    cell_batch_realworld_test.go:108: Duration: 627.283459ms
+    cell_batch_realworld_test.go:109: Throughput: 796928 ops/sec
+    cell_batch_realworld_test.go:112: 
+        === Performance Summary ===
+    cell_batch_realworld_test.go:113: Scenario: Replacing 499900 formulas with values
+    cell_batch_realworld_test.go:114: SetCellValue (loop):   509.83675ms (980510 ops/sec)
+    cell_batch_realworld_test.go:115: SetCellValues (batch): 627.283459ms (796928 ops/sec)
+    cell_batch_realworld_test.go:119: Speedup: 0.81x (batch is slower)
+--- PASS: TestSetCellValuesRealWorldScenario (1.92s)
+=== RUN   TestSetCellValuesBatchPerformance
+=== RUN   TestSetCellValuesBatchPerformance/Small_(1k_x_10)
+    cell_batch_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_test.go:47: Total cells: 10000
+    cell_batch_test.go:48: Duration: 4.397875ms
+    cell_batch_test.go:49: Throughput: 2273825 cells/sec
+    cell_batch_test.go:52: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_test.go:72: Total cells: 10000
+    cell_batch_test.go:73: Duration: 3.448583ms
+    cell_batch_test.go:74: Throughput: 2899742 cells/sec
+    cell_batch_test.go:77: 
+        === Performance Summary ===
+    cell_batch_test.go:78: Total cells: 10000
+    cell_batch_test.go:79: SetCellValue (loop): 4.397875ms
+    cell_batch_test.go:80: SetCellValues (batch): 3.448583ms
+    cell_batch_test.go:81: Speedup: 1.28x faster
+=== RUN   TestSetCellValuesBatchPerformance/Medium_(5k_x_50)
+    cell_batch_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_test.go:47: Total cells: 250000
+    cell_batch_test.go:48: Duration: 76.035375ms
+    cell_batch_test.go:49: Throughput: 3287943 cells/sec
+    cell_batch_test.go:52: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_test.go:72: Total cells: 250000
+    cell_batch_test.go:73: Duration: 85.608209ms
+    cell_batch_test.go:74: Throughput: 2920281 cells/sec
+    cell_batch_test.go:77: 
+        === Performance Summary ===
+    cell_batch_test.go:78: Total cells: 250000
+    cell_batch_test.go:79: SetCellValue (loop): 76.035375ms
+    cell_batch_test.go:80: SetCellValues (batch): 85.608209ms
+    cell_batch_test.go:81: Speedup: 0.89x faster
+=== RUN   TestSetCellValuesBatchPerformance/Large_(10k_x_100)
+    cell_batch_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_test.go:47: Total cells: 1000000
+    cell_batch_test.go:48: Duration: 339.731667ms
+    cell_batch_test.go:49: Throughput: 2943500 cells/sec
+    cell_batch_test.go:52: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_test.go:72: Total cells: 1000000
+    cell_batch_test.go:73: Duration: 359.945208ms
+    cell_batch_test.go:74: Throughput: 2778201 cells/sec
+    cell_batch_test.go:77: 
+        === Performance Summary ===
+    cell_batch_test.go:78: Total cells: 1000000
+    cell_batch_test.go:79: SetCellValue (loop): 339.731667ms
+    cell_batch_test.go:80: SetCellValues (batch): 359.945208ms
+    cell_batch_test.go:81: Speedup: 0.94x faster
+=== RUN   TestSetCellValuesBatchPerformance/Extra_Large_(40k_x_100)
+    cell_batch_test.go:34: 
+        === Test 1: SetCellValue in Loop (Original) ===
+    cell_batch_test.go:47: Total cells: 4000000
+    cell_batch_test.go:48: Duration: 1.320484833s
+    cell_batch_test.go:49: Throughput: 3029190 cells/sec
+    cell_batch_test.go:52: 
+        === Test 2: SetCellValues (Batch) ===
+    cell_batch_test.go:72: Total cells: 4000000
+    cell_batch_test.go:73: Duration: 1.644832958s
+    cell_batch_test.go:74: Throughput: 2431858 cells/sec
+    cell_batch_test.go:77: 
+        === Performance Summary ===
+    cell_batch_test.go:78: Total cells: 4000000
+    cell_batch_test.go:79: SetCellValue (loop): 1.320484833s
+    cell_batch_test.go:80: SetCellValues (batch): 1.644832958s
+    cell_batch_test.go:81: Speedup: 0.80x faster
+--- PASS: TestSetCellValuesBatchPerformance (4.81s)
+    --- PASS: TestSetCellValuesBatchPerformance/Small_(1k_x_10) (0.01s)
+    --- PASS: TestSetCellValuesBatchPerformance/Medium_(5k_x_50) (0.20s)
+    --- PASS: TestSetCellValuesBatchPerformance/Large_(10k_x_100) (0.87s)
+    --- PASS: TestSetCellValuesBatchPerformance/Extra_Large_(40k_x_100) (3.74s)
+=== RUN   TestSetCellValuesWithFormulas
+    cell_batch_test.go:104: Testing batch mode with formulas...
+    cell_batch_test.go:123: Set 5000 base values in 1.244ms
+    cell_batch_test.go:135: Set 5000 formulas
+    cell_batch_test.go:154: Updated 5000 base values in 719.166µs
+    cell_batch_test.go:167: Base value: 200, Formula result: 400
+--- PASS: TestSetCellValuesWithFormulas (0.01s)
+=== RUN   TestSetCellValuesMixedTypes
+    cell_batch_test.go:228: All mixed type values set correctly
+--- PASS: TestSetCellValuesMixedTypes (0.00s)
+=== RUN   TestGetRangeDataConcurrentSharedFormula
+
+=== Test GetCellFormula vs GetRangeDataConcurrent ===
+GetCellFormula D1: 'C1-1'
+GetCellFormula D2: 'C2-1'
+
+GetRangeDataConcurrent results:
+D1: Formula='=C1-1', Value=''
+D2: Formula='=C2-1', Value=''
+--- PASS: TestGetRangeDataConcurrentSharedFormula (0.00s)
+=== RUN   TestGetRangeDataConcurrentSharedFormulaDetailed
+
+=== Detailed Shared Formula Test ===
+GetCellFormula B1: 'A1*2'
+GetCellFormula B2: 'A2*2'
+GetCellFormula B3: 'A3*2'
+
+GetRangeDataConcurrent results:
+B1: Formula='=A1*2', Value=''
+B2: Formula='=A2*2', Value=''
+B3: Formula='=A3*2', Value=''
+--- PASS: TestGetRangeDataConcurrentSharedFormulaDetailed (0.00s)
+=== RUN   TestGetRangeValuesConcurrent
+--- PASS: TestGetRangeValuesConcurrent (0.00s)
+=== RUN   TestGetRangeDataConcurrent
+--- PASS: TestGetRangeDataConcurrent (0.00s)
+=== RUN   TestParseRange
+--- PASS: TestParseRange (0.00s)
+=== RUN   TestColumnStyleCacheInvalidation
+=== RUN   TestColumnStyleCacheInvalidation/SetColStyle_invalidates_cache
+    cell_style_cache_invalidation_test.go:108: SetColStyle invalidates cache: ✓ Cache invalidation works correctly
+=== RUN   TestColumnStyleCacheInvalidation/SetColWidth_invalidates_cache
+    cell_style_cache_invalidation_test.go:108: SetColWidth invalidates cache: ✓ Cache invalidation works correctly
+=== RUN   TestColumnStyleCacheInvalidation/SetColVisible_invalidates_cache
+    cell_style_cache_invalidation_test.go:108: SetColVisible invalidates cache: ✓ Cache invalidation works correctly
+=== RUN   TestColumnStyleCacheInvalidation/SetColOutlineLevel_invalidates_cache
+    cell_style_cache_invalidation_test.go:108: SetColOutlineLevel invalidates cache: ✓ Cache invalidation works correctly
+--- PASS: TestColumnStyleCacheInvalidation (0.00s)
+    --- PASS: TestColumnStyleCacheInvalidation/SetColStyle_invalidates_cache (0.00s)
+    --- PASS: TestColumnStyleCacheInvalidation/SetColWidth_invalidates_cache (0.00s)
+    --- PASS: TestColumnStyleCacheInvalidation/SetColVisible_invalidates_cache (0.00s)
+    --- PASS: TestColumnStyleCacheInvalidation/SetColOutlineLevel_invalidates_cache (0.00s)
+=== RUN   TestColumnStyleCacheConcurrency
+    cell_style_cache_invalidation_test.go:170: ✓ Concurrent cache operations completed successfully
+--- PASS: TestColumnStyleCacheConcurrency (0.00s)
+=== RUN   TestColumnStyleCacheMemoryBounds
+    cell_style_cache_invalidation_test.go:203: Cache size after 100 accesses: 100
+    cell_style_cache_invalidation_test.go:222: Cache size after modification: 99
+    cell_style_cache_invalidation_test.go:228: ✓ Cache memory bounds are respected
+--- PASS: TestColumnStyleCacheMemoryBounds (0.00s)
+=== RUN   TestColumnStyleCacheConsistency
+    cell_style_cache_invalidation_test.go:277: ✓ Cache consistency maintained after modifications
+--- PASS: TestColumnStyleCacheConsistency (0.00s)
+=== RUN   TestColumnStyleCacheRaceConditions
+    cell_style_cache_invalidation_test.go:319: ✓ No race conditions detected
+--- PASS: TestColumnStyleCacheRaceConditions (0.01s)
+=== RUN   TestColumnStyleCacheAfterColumnDeletion
+    cell_style_cache_invalidation_test.go:377: ✓ Selective cache invalidation works correctly
+--- PASS: TestColumnStyleCacheAfterColumnDeletion (0.00s)
+=== RUN   TestPrepareCellStyleCache
+    cell_style_cache_test.go:55: ✓ Column style caching works correctly
+--- PASS: TestPrepareCellStyleCache (0.00s)
+=== RUN   TestPrepareCellStyleCacheInvalidation
+    cell_style_cache_test.go:102: ✓ Cache invalidation works correctly
+--- PASS: TestPrepareCellStyleCacheInvalidation (0.00s)
+=== RUN   TestPrepareCellStylePerformance
+    cell_style_cache_test.go:134: 
+        === Column Style Cache Performance ===
+    cell_style_cache_test.go:135: Columns: 100
+    cell_style_cache_test.go:136: Iterations: 100000
+    cell_style_cache_test.go:137: Duration: 1.139583ms
+    cell_style_cache_test.go:138: Avg per call: 11ns
+    cell_style_cache_test.go:139: Throughput: 87751397 calls/sec
+    cell_style_cache_test.go:148: Cache entries: 100 (expected 100)
+--- PASS: TestPrepareCellStylePerformance (0.00s)
+=== RUN   TestPrepareCellStylePriorityOrder
+    cell_style_cache_test.go:234: ✓ Style priority order correct: cell > row > column
+--- PASS: TestPrepareCellStylePriorityOrder (0.00s)
+=== RUN   TestPrepareCellStyleEdgeCases
+    cell_style_cache_test.go:277: ✓ Edge cases handled correctly
+--- PASS: TestPrepareCellStyleEdgeCases (0.00s)
+=== RUN   TestConcurrency
+--- PASS: TestConcurrency (0.01s)
+=== RUN   TestCheckCellInRangeRef
+--- PASS: TestCheckCellInRangeRef (0.00s)
+=== RUN   TestSetCellFloat
+=== RUN   TestSetCellFloat/with_no_decimal
+=== RUN   TestSetCellFloat/with_a_decimal_and_precision_limit
+=== RUN   TestSetCellFloat/with_a_decimal_and_no_limit
+--- PASS: TestSetCellFloat (0.00s)
+    --- PASS: TestSetCellFloat/with_no_decimal (0.00s)
+    --- PASS: TestSetCellFloat/with_a_decimal_and_precision_limit (0.00s)
+    --- PASS: TestSetCellFloat/with_a_decimal_and_no_limit (0.00s)
+=== RUN   TestSetCellUint
+--- PASS: TestSetCellUint (0.00s)
+=== RUN   TestSetCellValuesMultiByte
+--- PASS: TestSetCellValuesMultiByte (0.01s)
+=== RUN   TestSetCellValue
+--- PASS: TestSetCellValue (0.00s)
+=== RUN   TestSetCellValues
+--- PASS: TestSetCellValues (0.00s)
+=== RUN   TestSetCellBool
+--- PASS: TestSetCellBool (0.00s)
+=== RUN   TestSetCellTime
+--- PASS: TestSetCellTime (0.00s)
+=== RUN   TestGetCellValue
+--- PASS: TestGetCellValue (0.00s)
+=== RUN   TestGetCellType
+--- PASS: TestGetCellType (0.00s)
+=== RUN   TestGetValueFrom
+--- PASS: TestGetValueFrom (0.00s)
+=== RUN   TestGetCellFormula
+--- PASS: TestGetCellFormula (0.00s)
+=== RUN   TestConvertSharedFormula
+--- PASS: TestConvertSharedFormula (0.00s)
+=== RUN   TestOverflowNumericCell
+--- PASS: TestOverflowNumericCell (0.00s)
+=== RUN   TestSetCellFormula
+--- PASS: TestSetCellFormula (0.01s)
+=== RUN   TestGetCellRichText
+--- PASS: TestGetCellRichText (0.00s)
+=== RUN   TestSetCellRichText
+--- PASS: TestSetCellRichText (0.00s)
+=== RUN   TestFormattedValue
+--- PASS: TestFormattedValue (0.00s)
+=== RUN   TestFormattedValueNilXfs
+--- PASS: TestFormattedValueNilXfs (0.00s)
+=== RUN   TestFormattedValueNilNumFmts
+--- PASS: TestFormattedValueNilNumFmts (0.00s)
+=== RUN   TestFormattedValueNilWorkbook
+--- PASS: TestFormattedValueNilWorkbook (0.00s)
+=== RUN   TestFormattedValueNilWorkbookPr
+--- PASS: TestFormattedValueNilWorkbookPr (0.00s)
+=== RUN   TestGetCustomNumFmtCode
+--- PASS: TestGetCustomNumFmtCode (0.00s)
+=== RUN   TestSharedStringsError
+--- PASS: TestSharedStringsError (0.00s)
+=== RUN   TestSetCellIntFunc
+--- PASS: TestSetCellIntFunc (0.00s)
+=== RUN   TestSIString
+--- PASS: TestSIString (0.00s)
+=== RUN   TestGetCellStringFunc
+--- PASS: TestGetCellStringFunc (0.00s)
+=== RUN   TestChartSize
+--- PASS: TestChartSize (0.00s)
+=== RUN   TestAddDrawingChart
+--- PASS: TestAddDrawingChart (0.00s)
+=== RUN   TestAddSheetDrawingChart
+--- PASS: TestAddSheetDrawingChart (0.00s)
+=== RUN   TestDeleteDrawing
+--- PASS: TestDeleteDrawing (0.00s)
+=== RUN   TestAddChart
+=== RUN   TestAddChart/for_create_stock_chart
+--- PASS: TestAddChart (0.01s)
+    --- PASS: TestAddChart/for_create_stock_chart (0.00s)
+=== RUN   TestAddChartSheet
+--- PASS: TestAddChartSheet (0.00s)
+=== RUN   TestDeleteChart
+--- PASS: TestDeleteChart (0.00s)
+=== RUN   TestChartWithLogarithmicBase
+--- PASS: TestChartWithLogarithmicBase (0.00s)
+=== RUN   TestCheckRowIndexOutOfRange
+
+=== Testing checkRow with sparse columns ===
+A1 = 'Col1'
+X1 = 'Col24'
+--- PASS: TestCheckRowIndexOutOfRange (0.00s)
+=== RUN   TestCheckRowWithCorruptedData
+
+=== Testing checkRow with wide sparse data ===
+A1 = 'Data1' ✅
+B1 = 'Data2' ✅
+Z1 = 'Data26' ✅
+A2 = 'Row2' ✅
+AA2 = 'Col27' ✅
+--- PASS: TestCheckRowWithCorruptedData (0.00s)
+=== RUN   TestCheckRowAfterInsertRows
+
+=== Testing checkRow after InsertRows ===
+A1 = 'Header1'
+X1 = 'Header24'
+A3 = 'Data1' (moved from A2)
+X3 = 'Data24' (moved from X2)
+--- PASS: TestCheckRowAfterInsertRows (0.00s)
+=== RUN   TestCheckRowWithWriteAndReload
+
+=== Testing checkRow after Write ===
+A1 = 'Data'
+Z1 = 'Col26'
+--- PASS: TestCheckRowWithWriteAndReload (0.00s)
+=== RUN   TestCheckRowMultipleTimes
+
+=== Testing multiple checkRow calls ===
+✅ checkRow call #1 succeeded
+✅ checkRow call #2 succeeded
+✅ checkRow call #3 succeeded
+--- PASS: TestCheckRowMultipleTimes (0.00s)
+=== RUN   TestCols
+--- PASS: TestCols (0.00s)
+=== RUN   TestColumnsIterator
+--- PASS: TestColumnsIterator (0.00s)
+=== RUN   TestColsError
+--- PASS: TestColsError (0.00s)
+=== RUN   TestGetColsError
+--- PASS: TestGetColsError (0.00s)
+=== RUN   TestColsRows
+--- PASS: TestColsRows (0.00s)
+=== RUN   TestColumnVisibility
+=== RUN   TestColumnVisibility/TestBook1
+=== RUN   TestColumnVisibility/TestBook3
+--- PASS: TestColumnVisibility (0.00s)
+    --- PASS: TestColumnVisibility/TestBook1 (0.00s)
+    --- PASS: TestColumnVisibility/TestBook3 (0.00s)
+=== RUN   TestOutlineLevel
+--- PASS: TestOutlineLevel (0.00s)
+=== RUN   TestSetColStyle
+--- PASS: TestSetColStyle (0.00s)
+=== RUN   TestColWidth
+--- PASS: TestColWidth (0.00s)
+=== RUN   TestGetColStyle
+--- PASS: TestGetColStyle (0.00s)
+=== RUN   TestInsertCols
+--- PASS: TestInsertCols (0.00s)
+=== RUN   TestRemoveCol
+--- PASS: TestRemoveCol (0.00s)
+=== RUN   TestConvertColWidthToPixels
+--- PASS: TestConvertColWidthToPixels (0.00s)
+=== RUN   TestColumnOperationCacheBehavior
+    column_cache_test.go:64: B1 cache after RemoveCol: V='20', T='n', Formula='A1*2'
+--- PASS: TestColumnOperationCacheBehavior (0.00s)
+=== RUN   TestColumnRemoveFormulaAdjustment
+    column_cache_test.go:118: After RemoveCol: C1 cache V='20', Formula='A1*2'
+--- PASS: TestColumnRemoveFormulaAdjustment (0.00s)
+=== RUN   TestInsertColumnFormulaAdjustment
+    column_cache_test.go:164: After InsertCols: C1 cache V='20', Formula='A1*2'
+--- PASS: TestInsertColumnFormulaAdjustment (0.00s)
+=== RUN   TestSetCellValuesConcurrency
+    concurrency_test.go:51: Concurrent batch operations (separate Files) completed successfully
+--- PASS: TestSetCellValuesConcurrency (0.00s)
+=== RUN   TestSetCellValuesPanicRecovery
+    concurrency_test.go:71: Panic recovery test passed, error: cannot convert cell "INVALID" to coordinates: invalid cell name "INVALID"
+--- PASS: TestSetCellValuesPanicRecovery (0.00s)
+=== RUN   TestSetCellValuesBatchModeIsolation
+--- PASS: TestSetCellValuesBatchModeIsolation (0.00s)
+=== RUN   TestSetCellValuesNestedBatch
+--- PASS: TestSetCellValuesNestedBatch (0.00s)
+=== RUN   TestCalcCellValuesConcurrency
+--- PASS: TestCalcCellValuesConcurrency (0.00s)
+=== RUN   TestCalcFormulaValueConcurrency
+--- PASS: TestCalcFormulaValueConcurrency (0.00s)
+=== RUN   TestRaceConditions
+    concurrency_test.go:304: Stress test completed: 10 goroutines × 100 iterations
+--- PASS: TestRaceConditions (0.00s)
+=== RUN   TestBatchOperationTimeout
+    concurrency_test.go:330: Batch operation completed successfully
+--- PASS: TestBatchOperationTimeout (0.00s)
+=== RUN   TestConcurrentWorkSheetWriter
+--- PASS: TestConcurrentWorkSheetWriter (0.00s)
+=== RUN   TestConcurrentWorkSheetWriterWithKeepMemory
+--- PASS: TestConcurrentWorkSheetWriterWithKeepMemory (0.00s)
+=== RUN   TestSequentialMultipleWrites
+--- PASS: TestSequentialMultipleWrites (0.01s)
+=== RUN   TestWorkSheetWriterStressTest
+--- PASS: TestWorkSheetWriterStressTest (0.01s)
+=== RUN   TestEncrypt
+--- PASS: TestEncrypt (0.09s)
+=== RUN   TestEncryptionMechanism
+--- PASS: TestEncryptionMechanism (0.00s)
+=== RUN   TestHashing
+--- PASS: TestHashing (0.00s)
+=== RUN   TestGenISOPasswdHash
+--- PASS: TestGenISOPasswdHash (0.21s)
+=== RUN   TestDataValidation
+--- PASS: TestDataValidation (0.00s)
+=== RUN   TestDataValidationError
+--- PASS: TestDataValidationError (0.00s)
+=== RUN   TestDeleteDataValidation
+=== RUN   TestDeleteDataValidation/delete_data_validation_from_extLst
+=== RUN   TestDeleteDataValidation/delete_data_validation_failed_from_extLst
+--- PASS: TestDeleteDataValidation (0.00s)
+    --- PASS: TestDeleteDataValidation/delete_data_validation_from_extLst (0.00s)
+    --- PASS: TestDeleteDataValidation/delete_data_validation_failed_from_extLst (0.00s)
+=== RUN   TestTimeToExcelTime
+=== RUN   TestTimeToExcelTime/TestData1
+=== RUN   TestTimeToExcelTime/TestData2
+=== RUN   TestTimeToExcelTime/TestData3
+=== RUN   TestTimeToExcelTime/TestData4
+=== RUN   TestTimeToExcelTime/TestData5
+=== RUN   TestTimeToExcelTime/TestData6
+=== RUN   TestTimeToExcelTime/TestData7
+=== RUN   TestTimeToExcelTime/TestData8
+=== RUN   TestTimeToExcelTime/TestData9
+=== RUN   TestTimeToExcelTime/TestData10
+--- PASS: TestTimeToExcelTime (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData1 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData2 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData3 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData4 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData5 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData6 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData7 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData8 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData9 (0.00s)
+    --- PASS: TestTimeToExcelTime/TestData10 (0.00s)
+=== RUN   TestTimeToExcelTime_Timezone
+=== RUN   TestTimeToExcelTime_Timezone/TestData1
+=== RUN   TestTimeToExcelTime_Timezone/TestData2
+=== RUN   TestTimeToExcelTime_Timezone/TestData3
+=== RUN   TestTimeToExcelTime_Timezone/TestData4
+=== RUN   TestTimeToExcelTime_Timezone/TestData5
+=== RUN   TestTimeToExcelTime_Timezone/TestData6
+=== RUN   TestTimeToExcelTime_Timezone/TestData7
+=== RUN   TestTimeToExcelTime_Timezone/TestData8
+=== RUN   TestTimeToExcelTime_Timezone/TestData9
+=== RUN   TestTimeToExcelTime_Timezone/TestData10
+--- PASS: TestTimeToExcelTime_Timezone (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData1 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData2 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData3 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData4 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData5 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData6 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData7 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData8 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData9 (0.00s)
+    --- PASS: TestTimeToExcelTime_Timezone/TestData10 (0.00s)
+=== RUN   TestTimeFromExcelTime
+=== RUN   TestTimeFromExcelTime/TestData1
+=== RUN   TestTimeFromExcelTime/TestData2
+=== RUN   TestTimeFromExcelTime/TestData3
+=== RUN   TestTimeFromExcelTime/TestData4
+=== RUN   TestTimeFromExcelTime/TestData5
+=== RUN   TestTimeFromExcelTime/TestData6
+--- PASS: TestTimeFromExcelTime (0.06s)
+    --- PASS: TestTimeFromExcelTime/TestData1 (0.00s)
+    --- PASS: TestTimeFromExcelTime/TestData2 (0.00s)
+    --- PASS: TestTimeFromExcelTime/TestData3 (0.00s)
+    --- PASS: TestTimeFromExcelTime/TestData4 (0.00s)
+    --- PASS: TestTimeFromExcelTime/TestData5 (0.00s)
+    --- PASS: TestTimeFromExcelTime/TestData6 (0.00s)
+=== RUN   TestTimeFromExcelTime_1904
+--- PASS: TestTimeFromExcelTime_1904 (0.00s)
+=== RUN   TestExcelDateToTime
+=== RUN   TestExcelDateToTime/TestData1
+=== RUN   TestExcelDateToTime/TestData2
+=== RUN   TestExcelDateToTime/TestData3
+=== RUN   TestExcelDateToTime/TestData4
+=== RUN   TestExcelDateToTime/TestData5
+=== RUN   TestExcelDateToTime/TestData6
+--- PASS: TestExcelDateToTime (0.00s)
+    --- PASS: TestExcelDateToTime/TestData1 (0.00s)
+    --- PASS: TestExcelDateToTime/TestData2 (0.00s)
+    --- PASS: TestExcelDateToTime/TestData3 (0.00s)
+    --- PASS: TestExcelDateToTime/TestData4 (0.00s)
+    --- PASS: TestExcelDateToTime/TestData5 (0.00s)
+    --- PASS: TestExcelDateToTime/TestData6 (0.00s)
+=== RUN   TestSetAppProps
+--- PASS: TestSetAppProps (0.00s)
+=== RUN   TestGetAppProps
+--- PASS: TestGetAppProps (0.00s)
+=== RUN   TestSetDocProps
+--- PASS: TestSetDocProps (0.00s)
+=== RUN   TestGetDocProps
+--- PASS: TestGetDocProps (0.00s)
+=== RUN   TestCustomProps
+--- PASS: TestCustomProps (0.00s)
+=== RUN   TestDrawingParser
+--- PASS: TestDrawingParser (0.00s)
+=== RUN   TestDeleteDrawingRels
+--- PASS: TestDeleteDrawingRels (0.00s)
+=== RUN   TestNewInvalidColNameError
+--- PASS: TestNewInvalidColNameError (0.00s)
+=== RUN   TestNewInvalidRowNumberError
+--- PASS: TestNewInvalidRowNumberError (0.00s)
+=== RUN   TestNewInvalidCellNameError
+--- PASS: TestNewInvalidCellNameError (0.00s)
+=== RUN   TestNewInvalidExcelDateError
+--- PASS: TestNewInvalidExcelDateError (0.00s)
+=== RUN   TestOpenFile
+--- PASS: TestOpenFile (0.00s)
+=== RUN   TestSaveFile
+=== RUN   TestSaveFile/for_save_multiple_times
+--- PASS: TestSaveFile (0.01s)
+    --- PASS: TestSaveFile/for_save_multiple_times (0.00s)
+=== RUN   TestSaveAsWrongPath
+--- PASS: TestSaveAsWrongPath (0.00s)
+=== RUN   TestCharsetTranscoder
+--- PASS: TestCharsetTranscoder (0.00s)
+=== RUN   TestOpenReader
+--- PASS: TestOpenReader (0.06s)
+=== RUN   TestBrokenFile
+=== RUN   TestBrokenFile/SaveWithoutName
+=== RUN   TestBrokenFile/SaveAsEmptyStruct
+=== RUN   TestBrokenFile/OpenBadWorkbook
+=== RUN   TestBrokenFile/OpenNotExistsFile
+--- PASS: TestBrokenFile (0.00s)
+    --- PASS: TestBrokenFile/SaveWithoutName (0.00s)
+    --- PASS: TestBrokenFile/SaveAsEmptyStruct (0.00s)
+    --- PASS: TestBrokenFile/OpenBadWorkbook (0.00s)
+    --- PASS: TestBrokenFile/OpenNotExistsFile (0.00s)
+=== RUN   TestNewFile
+--- PASS: TestNewFile (0.00s)
+=== RUN   TestSetCellHyperLink
+--- PASS: TestSetCellHyperLink (0.00s)
+=== RUN   TestGetCellHyperLink
+--- PASS: TestGetCellHyperLink (0.00s)
+=== RUN   TestSetSheetBackground
+--- PASS: TestSetSheetBackground (0.00s)
+=== RUN   TestSetSheetBackgroundErrors
+--- PASS: TestSetSheetBackgroundErrors (0.00s)
+=== RUN   TestWriteArrayFormula
+--- PASS: TestWriteArrayFormula (0.00s)
+=== RUN   TestSetCellStyleAlignment
+--- PASS: TestSetCellStyleAlignment (0.00s)
+=== RUN   TestSetCellStyleBorder
+--- PASS: TestSetCellStyleBorder (0.00s)
+=== RUN   TestSetCellStyleBorderErrors
+--- PASS: TestSetCellStyleBorderErrors (0.00s)
+=== RUN   TestSetCellStyleNumberFormat
+--- PASS: TestSetCellStyleNumberFormat (0.01s)
+=== RUN   TestSetCellStyleCurrencyNumberFormat
+=== RUN   TestSetCellStyleCurrencyNumberFormat/TestBook3
+=== RUN   TestSetCellStyleCurrencyNumberFormat/TestBook4
+--- PASS: TestSetCellStyleCurrencyNumberFormat (0.00s)
+    --- PASS: TestSetCellStyleCurrencyNumberFormat/TestBook3 (0.00s)
+    --- PASS: TestSetCellStyleCurrencyNumberFormat/TestBook4 (0.00s)
+=== RUN   TestSetCellStyleLangNumberFormat
+--- PASS: TestSetCellStyleLangNumberFormat (0.01s)
+=== RUN   TestSetCellStyleCustomNumberFormat
+--- PASS: TestSetCellStyleCustomNumberFormat (0.00s)
+=== RUN   TestSetCellStyleFill
+--- PASS: TestSetCellStyleFill (0.00s)
+=== RUN   TestSetCellStyleFont
+--- PASS: TestSetCellStyleFont (0.00s)
+=== RUN   TestSetCellStyleProtection
+--- PASS: TestSetCellStyleProtection (0.00s)
+=== RUN   TestSetDeleteSheet
+=== RUN   TestSetDeleteSheet/TestBook3
+=== RUN   TestSetDeleteSheet/TestBook4
+--- PASS: TestSetDeleteSheet (0.00s)
+    --- PASS: TestSetDeleteSheet/TestBook3 (0.00s)
+    --- PASS: TestSetDeleteSheet/TestBook4 (0.00s)
+=== RUN   TestSheetVisibility
+--- PASS: TestSheetVisibility (0.00s)
+=== RUN   TestCopySheet
+--- PASS: TestCopySheet (0.00s)
+=== RUN   TestDuplicateSheet
+--- PASS: TestDuplicateSheet (0.00s)
+=== RUN   TestDuplicateSheetAt
+--- PASS: TestDuplicateSheetAt (0.00s)
+=== RUN   TestDuplicateSheetError
+--- PASS: TestDuplicateSheetError (0.00s)
+=== RUN   TestCopySheetError
+--- PASS: TestCopySheetError (0.00s)
+=== RUN   TestGetSheetComments
+--- PASS: TestGetSheetComments (0.00s)
+=== RUN   TestGetActiveSheetIndex
+--- PASS: TestGetActiveSheetIndex (0.00s)
+=== RUN   TestRelsWriter
+--- PASS: TestRelsWriter (0.00s)
+=== RUN   TestConditionalFormat
+--- PASS: TestConditionalFormat (0.00s)
+=== RUN   TestSharedStrings
+--- PASS: TestSharedStrings (0.00s)
+=== RUN   TestSetSheetCol
+--- PASS: TestSetSheetCol (0.00s)
+=== RUN   TestSetSheetRow
+--- PASS: TestSetSheetRow (0.00s)
+=== RUN   TestHSL
+--- PASS: TestHSL (0.00s)
+=== RUN   TestProtectSheet
+--- PASS: TestProtectSheet (0.10s)
+=== RUN   TestUnprotectSheet
+--- PASS: TestUnprotectSheet (0.04s)
+=== RUN   TestProtectWorkbook
+--- PASS: TestProtectWorkbook (0.03s)
+=== RUN   TestUnprotectWorkbook
+--- PASS: TestUnprotectWorkbook (0.24s)
+=== RUN   TestSetDefaultTimeStyle
+--- PASS: TestSetDefaultTimeStyle (0.00s)
+=== RUN   TestAddVBAProject
+--- PASS: TestAddVBAProject (0.00s)
+=== RUN   TestContentTypesReader
+--- PASS: TestContentTypesReader (0.00s)
+=== RUN   TestWorkbookReader
+--- PASS: TestWorkbookReader (0.00s)
+=== RUN   TestWorkSheetReader
+--- PASS: TestWorkSheetReader (0.00s)
+=== RUN   TestRelsReader
+--- PASS: TestRelsReader (0.00s)
+=== RUN   TestDeleteSheetFromWorkbookRels
+--- PASS: TestDeleteSheetFromWorkbookRels (0.00s)
+=== RUN   TestUpdateLinkedValue
+--- PASS: TestUpdateLinkedValue (0.00s)
+=== RUN   TestAttrValToInt
+--- PASS: TestAttrValToInt (0.00s)
+=== RUN   TestLoadWorksheet
+--- PASS: TestLoadWorksheet (0.01s)
+=== RUN   TestUnloadWorksheet
+--- PASS: TestUnloadWorksheet (0.00s)
+=== RUN   TestLoadWorksheetPerformance
+--- PASS: TestLoadWorksheetPerformance (0.01s)
+=== RUN   TestWorksheetCacheManagement
+--- PASS: TestWorksheetCacheManagement (0.00s)
+=== RUN   TestLoadWorksheetWithInvalidSheetName
+--- PASS: TestLoadWorksheetWithInvalidSheetName (0.00s)
+=== RUN   TestIsWorksheetLoadedAfterNormalOperations
+--- PASS: TestIsWorksheetLoadedAfterNormalOperations (0.00s)
+=== RUN   TestWriteNonDestructive
+
+=== Test WriteNonDestructive vs Write ===
+
+--- Step 1: Create data (rows 1-5, 100) ---
+Initial row count: 100
+
+--- Step 2: Call WriteNonDestructive ---
+WriteNonDestructive output: 6043 bytes
+After WriteNonDestructive row count: 100
+
+--- Step 3: Write to empty row 50 ---
+A50 value: 'NewRow50'
+
+--- Step 4: Compare with Write() ---
+Before Write() row count: 100
+After Write() row count: 6
+A50 value after Write(): 'NewRow50'
+--- PASS: TestWriteNonDestructive (0.00s)
+=== RUN   TestWriteNonDestructiveMultiWorksheet
+
+=== Test WriteNonDestructive Multi-Worksheet ===
+
+--- Create Sheet A (91 columns) ---
+
+--- Create Sheet B (30 columns) ---
+
+--- Call WriteNonDestructive ---
+
+--- Insert rows in Sheet B ---
+
+--- Write to column A in Sheet B ---
+A2: wrote='SKU-2', read='SKU-2'
+A3: wrote='SKU-3', read='SKU-3'
+A4: wrote='SKU-4', read='SKU-4'
+A5: wrote='SKU-5', read='SKU-5'
+A6: wrote='SKU-6', read='SKU-6'
+
+✅ WriteNonDestructive preserves multi-worksheet state correctly!
+--- PASS: TestWriteNonDestructiveMultiWorksheet (0.00s)
+=== RUN   TestWriteNonDestructiveWithInsertRows
+
+=== Test WriteNonDestructive with InsertRows (Production Bug) ===
+
+--- Step 1: Create rows 1-5 ---
+
+--- Step 2: InsertRows(6, 10) ---
+
+--- Step 3: WriteNonDestructive (save to GridFS) ---
+
+--- Step 4: Write to inserted rows 6-15 ---
+A6: wrote='SKU-6', read='SKU-6'
+A7: wrote='SKU-7', read='SKU-7'
+A8: wrote='SKU-8', read='SKU-8'
+A9: wrote='SKU-9', read='SKU-9'
+A10: wrote='SKU-10', read='SKU-10'
+A11: wrote='SKU-11', read='SKU-11'
+A12: wrote='SKU-12', read='SKU-12'
+A13: wrote='SKU-13', read='SKU-13'
+A14: wrote='SKU-14', read='SKU-14'
+A15: wrote='SKU-15', read='SKU-15'
+
+✅ WriteNonDestructive fixes the production bug!
+--- PASS: TestWriteNonDestructiveWithInsertRows (0.00s)
+=== RUN   TestWriteVsWriteNonDestructiveComparison
+
+Output size comparison:
+  Write():              5996 bytes
+  WriteNonDestructive(): 5996 bytes
+--- PASS: TestWriteVsWriteNonDestructiveComparison (0.00s)
+=== RUN   TestWriteTo
+--- PASS: TestWriteTo (0.00s)
+=== RUN   TestClose
+--- PASS: TestClose (0.00s)
+=== RUN   TestZip64
+=== RUN   TestZip64/for_save_zip64_with_in_memory_file_over_4GB
+=== RUN   TestZip64/for_save_zip64_with_in_temporary_file_over_4GB
+--- PASS: TestZip64 (35.83s)
+    --- PASS: TestZip64/for_save_zip64_with_in_memory_file_over_4GB (6.22s)
+    --- PASS: TestZip64/for_save_zip64_with_in_temporary_file_over_4GB (8.40s)
+=== RUN   TestRemoveTempFiles
+--- PASS: TestRemoveTempFiles (0.00s)
+=== RUN   TestUpdateFormulaCache
+=== RUN   TestUpdateFormulaCache/basic_formula_caching
+=== RUN   TestUpdateFormulaCache/multiple_formulas
+=== RUN   TestUpdateFormulaCache/formatted_values
+=== RUN   TestUpdateFormulaCache/date_and_time_formats
+=== RUN   TestUpdateFormulaCache/empty_sheet
+=== RUN   TestUpdateFormulaCache/multiple_sheets
+--- PASS: TestUpdateFormulaCache (0.01s)
+    --- PASS: TestUpdateFormulaCache/basic_formula_caching (0.00s)
+    --- PASS: TestUpdateFormulaCache/multiple_formulas (0.00s)
+    --- PASS: TestUpdateFormulaCache/formatted_values (0.00s)
+    --- PASS: TestUpdateFormulaCache/date_and_time_formats (0.00s)
+    --- PASS: TestUpdateFormulaCache/empty_sheet (0.00s)
+    --- PASS: TestUpdateFormulaCache/multiple_sheets (0.00s)
+=== RUN   TestUpdateSheetFormulaCache
+=== RUN   TestUpdateSheetFormulaCache/single_sheet_update
+=== RUN   TestUpdateSheetFormulaCache/invalid_sheet
+--- PASS: TestUpdateSheetFormulaCache (0.00s)
+    --- PASS: TestUpdateSheetFormulaCache/single_sheet_update (0.00s)
+    --- PASS: TestUpdateSheetFormulaCache/invalid_sheet (0.00s)
+=== RUN   TestCalcCellValueCacheKeyWithRawValue
+=== RUN   TestCalcCellValueCacheKeyWithRawValue/cache_keys_are_different_for_raw_vs_formatted
+=== RUN   TestCalcCellValueCacheKeyWithRawValue/cache_works_correctly_with_different_call_orders
+--- PASS: TestCalcCellValueCacheKeyWithRawValue (0.00s)
+    --- PASS: TestCalcCellValueCacheKeyWithRawValue/cache_keys_are_different_for_raw_vs_formatted (0.00s)
+    --- PASS: TestCalcCellValueCacheKeyWithRawValue/cache_works_correctly_with_different_call_orders (0.00s)
+=== RUN   TestInsertRowsThenBatchUpdate
+=== 初始状态 ===
+Row 1: A=10, B=20
+Row 2: A=20, B=40
+Row 3: A=30, B=60
+Row 4: A=40, B=80
+
+=== 在第 3 行插入新行 ===
+
+=== 插入后的状态 ===
+Row 1: A=10, B=20, Formula=A1*2
+Row 2: A=20, B=40, Formula=A2*2
+Row 3: A=, B=, Formula=
+Row 4: A=30, B=60, Formula=A4*2
+Row 5: A=40, B=80, Formula=A5*2
+
+=== 批量更新第 3 行 ===
+受影响的单元格数: 0
+
+=== 最终状态 ===
+Row 1: A=10, B=20, Formula=A1*2
+Row 2: A=20, B=40, Formula=A2*2
+Row 3: A=100, B=200, Formula=
+Row 4: A=30, B=60, Formula=A4*2
+Row 5: A=40, B=80, Formula=A5*2
+--- PASS: TestInsertRowsThenBatchUpdate (0.00s)
+=== RUN   TestInsertRowsWithFormulaDependencies
+
+受影响的单元格: 0
+
+A5 formula after insert: SUM(A1:A4)
+A5 value: 60
+--- PASS: TestInsertRowsWithFormulaDependencies (0.00s)
+=== RUN   TestInsertRowsEmptyRowBatchUpdate
+--- PASS: TestInsertRowsEmptyRowBatchUpdate (0.00s)
+=== RUN   TestInsertRowBatchUpdateEdgeCases
+=== RUN   TestInsertRowBatchUpdateEdgeCases/Insert_at_row_1
+Row 1: A=First, B=100
+=== RUN   TestInsertRowBatchUpdateEdgeCases/Insert_multiple_rows_then_update
+A1 = R1 (expected: R1)
+A2 = R2 (expected: R2)
+A3 = R3 (expected: R3)
+=== RUN   TestInsertRowBatchUpdateEdgeCases/Insert_then_update_with_GetRows
+Total rows: 2
+Row 1: [Original]
+Row 2: [Inserted 123]
+=== RUN   TestInsertRowBatchUpdateEdgeCases/Insert_row_and_immediately_batch_update_without_recalc
+A1=Test1, B1=Test2
+=== RUN   TestInsertRowBatchUpdateEdgeCases/Insert_row_in_middle_of_large_dataset
+A50=INSERTED, B50=NEW, A51=Data50
+--- PASS: TestInsertRowBatchUpdateEdgeCases (0.00s)
+    --- PASS: TestInsertRowBatchUpdateEdgeCases/Insert_at_row_1 (0.00s)
+    --- PASS: TestInsertRowBatchUpdateEdgeCases/Insert_multiple_rows_then_update (0.00s)
+    --- PASS: TestInsertRowBatchUpdateEdgeCases/Insert_then_update_with_GetRows (0.00s)
+    --- PASS: TestInsertRowBatchUpdateEdgeCases/Insert_row_and_immediately_batch_update_without_recalc (0.00s)
+    --- PASS: TestInsertRowBatchUpdateEdgeCases/Insert_row_in_middle_of_large_dataset (0.00s)
+=== RUN   TestInsertRowWithWorksheetNotLoaded
+
+=== 工作表未加载状态 ===
+A2=InsertedInUnloaded, B2=999, A3=Data1
+--- PASS: TestInsertRowWithWorksheetNotLoaded (0.00s)
+=== RUN   TestInsertRowBatchUpdateCellReference
+A1=Wrong, A2=Correct, A3=D1
+--- PASS: TestInsertRowBatchUpdateCellReference (0.00s)
+=== RUN   TestInsertRowBatchUpdateEmptySheet
+Empty sheet: A1=FirstEver, B1=123
+--- PASS: TestInsertRowBatchUpdateEmptySheet (0.00s)
+=== RUN   TestInsertRowBatchUpdateThenGet
+=== 初始数据 ===
+Row 1: A=Header1, B=Header2
+Row 2: A=Data1, B=100
+Row 3: A=Data2, B=200
+
+=== 插入第 3 行 ===
+
+=== 插入后的数据 ===
+Row 1: A=Header1, B=Header2
+Row 2: A=Data1, B=100
+Row 3: A=, B=
+Row 4: A=Data2, B=200
+
+=== 批量更新第 3 行 ===
+受影响的单元格: 0
+
+=== 获取第 3 行的值 ===
+A3 = 'NewData' (expected: 'NewData')
+B3 = '999' (expected: '999')
+C3 = 'Extra' (expected: 'Extra')
+
+=== 所有行的最终状态 ===
+Row 1: A=Header1, B=Header2, C=
+Row 2: A=Data1, B=100, C=
+Row 3: A=NewData, B=999, C=Extra
+Row 4: A=Data2, B=200, C=
+--- PASS: TestInsertRowBatchUpdateThenGet (0.00s)
+=== RUN   TestInsertRowBatchUpdateMultipleCells
+=== 初始数据 ===
+Row 1: [Col1 Col2 Col3 Col4 Col5]
+Row 2: [10 20 30 40 50]
+
+=== 插入第 2 行 ===
+
+=== 批量更新第 2 行的 5 个单元格 ===
+
+=== 获取第 2 行的值 ===
+A2 = 'A' (expected: 'A')
+B2 = 'B' (expected: 'B')
+C2 = 'C' (expected: 'C')
+D2 = 'D' (expected: 'D')
+E2 = 'E' (expected: 'E')
+
+=== 所有行的最终状态 ===
+Row 1: [Col1 Col2 Col3 Col4 Col5]
+Row 2: [A B C D E]
+Row 3: [10 20 30 40 50]
+--- PASS: TestInsertRowBatchUpdateMultipleCells (0.00s)
+=== RUN   TestInsertRowBatchUpdateDifferentTypes
+
+=== 验证不同类型的值 ===
+A2 = 'String' (expected: 'String') - string value
+B2 = '123' (expected: '123') - integer value
+C2 = '456.78' (expected: '456.78') - float value
+D2 = 'TRUE' (expected: 'TRUE') - boolean value
+E2 = '' (expected: '') - nil value
+--- PASS: TestInsertRowBatchUpdateDifferentTypes (0.00s)
+=== RUN   TestInsertRowBatchUpdateWithSave
+
+=== 重新打开文件验证 ===
+重新打开后: A2='TestData', B2='999'
+--- PASS: TestInsertRowBatchUpdateWithSave (0.00s)
+=== RUN   TestInsertRowsDoesNotUnloadWorksheet
+
+=== 检查初始状态 ===
+✅ Worksheet 'Sheet1' 在内存中
+
+=== 调用 InsertRows ===
+✅ InsertRows 成功
+
+=== 检查 InsertRows 后的状态 ===
+✅ Worksheet 'Sheet1' 仍然在内存中
+✅ Worksheet 是同一个实例（未重新加载）
+
+=== 验证数据仍然可访问 ===
+A1 = 'Data1' ✅
+A3 = 'Data2' (原 A2 移动到这里) ✅
+--- PASS: TestInsertRowsDoesNotUnloadWorksheet (0.00s)
+=== RUN   TestMultipleInsertRowsKeepsWorksheet
+
+=== 多次调用 InsertRows ===
+InsertRows #1: Worksheet 在内存中, Ptr=0x140016ded88
+InsertRows #2: Worksheet 在内存中, Ptr=0x140016ded88
+InsertRows #3: Worksheet 在内存中, Ptr=0x140016ded88
+✅ 多次 InsertRows 后 worksheet 始终在内存中
+--- PASS: TestMultipleInsertRowsKeepsWorksheet (0.00s)
+=== RUN   TestInsertRowsThenBatchUpdateWorksheetState
+
+=== 完整流程：InsertRows → BatchUpdate → GetValue ===
+1️⃣  初始状态: Worksheet 在内存, Ptr=0x1400172b208
+2️⃣  InsertRows 后: Worksheet 在内存, Ptr=0x1400172b208 (相同=true)
+3️⃣  BatchUpdate 后: Worksheet 在内存, Ptr=0x1400172b208 (相同=true)
+4️⃣  GetValue 后: Worksheet 在内存, Ptr=0x1400172b208 (相同=true)
+
+✅ 所有步骤中 worksheet 始终是同一个实例
+✅ A2 = 'Inserted' (获取成功)
+--- PASS: TestInsertRowsThenBatchUpdateWorksheetState (0.00s)
+=== RUN   TestInsertRowsWithWriteAndKeepMemory
+=== RUN   TestInsertRowsWithWriteAndKeepMemory/Without_KeepWorksheetInMemory
+
+InsertRows 后: Worksheet 在内存, Ptr=0x14001777448
+Write 后 (默认): Worksheet 在内存=false
+重新加载后: A1='Data' ✅
+=== RUN   TestInsertRowsWithWriteAndKeepMemory/With_KeepWorksheetInMemory
+
+InsertRows 后: Worksheet 在内存, Ptr=0x140017bdb08
+Write 后 (KeepMemory): Worksheet 在内存=true
+Ptr 相同=true ✅
+--- PASS: TestInsertRowsWithWriteAndKeepMemory (0.00s)
+    --- PASS: TestInsertRowsWithWriteAndKeepMemory/Without_KeepWorksheetInMemory (0.00s)
+    --- PASS: TestInsertRowsWithWriteAndKeepMemory/With_KeepWorksheetInMemory (0.00s)
+=== RUN   TestKeepWorksheetInMemory_Basic
+=== RUN   TestKeepWorksheetInMemory_Basic/Default_ShouldUnload
+=== RUN   TestKeepWorksheetInMemory_Basic/KeepEnabled_ShouldKeep
+=== RUN   TestKeepWorksheetInMemory_Basic/KeepDisabled_ShouldUnload
+--- PASS: TestKeepWorksheetInMemory_Basic (0.00s)
+    --- PASS: TestKeepWorksheetInMemory_Basic/Default_ShouldUnload (0.00s)
+    --- PASS: TestKeepWorksheetInMemory_Basic/KeepEnabled_ShouldKeep (0.00s)
+    --- PASS: TestKeepWorksheetInMemory_Basic/KeepDisabled_ShouldUnload (0.00s)
+=== RUN   TestKeepWorksheetInMemory_MultipleSheets
+--- PASS: TestKeepWorksheetInMemory_MultipleSheets (0.00s)
+=== RUN   TestKeepWorksheetInMemory_SaveAs
+=== RUN   TestKeepWorksheetInMemory_SaveAs/SaveAs_WithKeep
+=== RUN   TestKeepWorksheetInMemory_SaveAs/SaveAs_Default
+--- PASS: TestKeepWorksheetInMemory_SaveAs (0.00s)
+    --- PASS: TestKeepWorksheetInMemory_SaveAs/SaveAs_WithKeep (0.00s)
+    --- PASS: TestKeepWorksheetInMemory_SaveAs/SaveAs_Default (0.00s)
+=== RUN   TestKeepWorksheetInMemory_WithFormulas
+--- PASS: TestKeepWorksheetInMemory_WithFormulas (0.00s)
+=== RUN   TestKeepWorksheetInMemory_MultipleWriteCycles
+--- PASS: TestKeepWorksheetInMemory_MultipleWriteCycles (0.00s)
+=== RUN   TestKeepWorksheetInMemory_LargeWorksheet
+    keep_worksheet_test.go:290: Creating 10000 rows...
+    keep_worksheet_test.go:305: Output size: 127224 bytes
+--- PASS: TestKeepWorksheetInMemory_LargeWorksheet (0.03s)
+=== RUN   TestKeepWorksheetInMemory_DataIntegrity
+--- PASS: TestKeepWorksheetInMemory_DataIntegrity (0.00s)
+=== RUN   TestColumnNameToNumber_OK
+--- PASS: TestColumnNameToNumber_OK (0.00s)
+=== RUN   TestColumnNameToNumber_Error
+--- PASS: TestColumnNameToNumber_Error (0.00s)
+=== RUN   TestColumnNumberToName_OK
+--- PASS: TestColumnNumberToName_OK (0.00s)
+=== RUN   TestColumnNumberToName_Error
+--- PASS: TestColumnNumberToName_Error (0.00s)
+=== RUN   TestSplitCellName_OK
+--- PASS: TestSplitCellName_OK (0.00s)
+=== RUN   TestSplitCellName_Error
+--- PASS: TestSplitCellName_Error (0.00s)
+=== RUN   TestJoinCellName_OK
+--- PASS: TestJoinCellName_OK (0.00s)
+=== RUN   TestJoinCellName_Error
+--- PASS: TestJoinCellName_Error (0.00s)
+=== RUN   TestCellNameToCoordinates_OK
+--- PASS: TestCellNameToCoordinates_OK (0.00s)
+=== RUN   TestCellNameToCoordinates_Error
+--- PASS: TestCellNameToCoordinates_Error (0.00s)
+=== RUN   TestCoordinatesToCellName_OK
+--- PASS: TestCoordinatesToCellName_OK (0.00s)
+=== RUN   TestCoordinatesToCellName_Error
+--- PASS: TestCoordinatesToCellName_Error (0.00s)
+=== RUN   TestCoordinatesToRangeRef
+--- PASS: TestCoordinatesToRangeRef (0.00s)
+=== RUN   TestSortCoordinates
+--- PASS: TestSortCoordinates (0.00s)
+=== RUN   TestInStrSlice
+--- PASS: TestInStrSlice (0.00s)
+=== RUN   TestAttrValue
+--- PASS: TestAttrValue (0.00s)
+=== RUN   TestBoolValMarshal
+--- PASS: TestBoolValMarshal (0.00s)
+=== RUN   TestBoolValUnmarshalXML
+--- PASS: TestBoolValUnmarshalXML (0.00s)
+=== RUN   TestExtUnmarshalXML
+--- PASS: TestExtUnmarshalXML (0.00s)
+=== RUN   TestBytesReplace
+--- PASS: TestBytesReplace (0.00s)
+=== RUN   TestGetRootElement
+--- PASS: TestGetRootElement (0.00s)
+=== RUN   TestSetIgnorableNameSpace
+--- PASS: TestSetIgnorableNameSpace (0.00s)
+=== RUN   TestStack
+--- PASS: TestStack (0.00s)
+=== RUN   TestGenXMLNamespace
+--- PASS: TestGenXMLNamespace (0.00s)
+=== RUN   TestBstrUnmarshal
+--- PASS: TestBstrUnmarshal (0.00s)
+=== RUN   TestBstrMarshal
+--- PASS: TestBstrMarshal (0.00s)
+=== RUN   TestTruncateUTF16Units
+--- PASS: TestTruncateUTF16Units (0.00s)
+=== RUN   TestReadBytes
+--- PASS: TestReadBytes (0.00s)
+=== RUN   TestUnzipToTemp
+--- PASS: TestUnzipToTemp (0.00s)
+=== RUN   TestFloat2Frac
+--- PASS: TestFloat2Frac (0.00s)
+=== RUN   TestLRUCacheMemoryLimit
+=== RUN   TestLRUCacheMemoryLimit/WithLRU_50
+    lru_cache_bench_test.go:93: LRU(50) - Stored 100, Kept 50, Memory: 67.44 MB
+=== RUN   TestLRUCacheMemoryLimit/WithLRU_10
+    lru_cache_bench_test.go:121: LRU(10) - Stored 100, Kept 10, Memory: 13.66 MB
+--- PASS: TestLRUCacheMemoryLimit (0.06s)
+    --- PASS: TestLRUCacheMemoryLimit/WithLRU_50 (0.04s)
+    --- PASS: TestLRUCacheMemoryLimit/WithLRU_10 (0.03s)
+=== RUN   TestLRUCache
+--- PASS: TestLRUCache (0.00s)
+=== RUN   TestLRUCacheWithRanges
+LRU cache test passed: capacity=2, entries=2
+--- PASS: TestLRUCacheWithRanges (0.00s)
+=== RUN   TestLRUCacheRange
+--- PASS: TestLRUCacheRange (0.00s)
+=== RUN   TestMergeCell
+--- PASS: TestMergeCell (0.00s)
+=== RUN   TestMergeCellOverlap
+--- PASS: TestMergeCellOverlap (0.00s)
+=== RUN   TestGetMergeCells
+--- PASS: TestGetMergeCells (0.00s)
+=== RUN   TestUnmergeCell
+--- PASS: TestUnmergeCell (0.00s)
+=== RUN   TestMergeCellsParser
+--- PASS: TestMergeCellsParser (0.00s)
+=== RUN   TestMoveRowSameSheet
+--- PASS: TestMoveRowSameSheet (0.01s)
+=== RUN   TestMoveRowCrossSheet
+--- PASS: TestMoveRowCrossSheet (0.01s)
+=== RUN   TestMoveRowUp
+--- PASS: TestMoveRowUp (0.01s)
+=== RUN   TestMoveColSameSheet
+--- PASS: TestMoveColSameSheet (0.00s)
+=== RUN   TestMoveColCrossSheet
+--- PASS: TestMoveColCrossSheet (0.00s)
+=== RUN   TestMoveColLeft
+--- PASS: TestMoveColLeft (0.00s)
+=== RUN   TestMoveRowWithFormulasInMovedRow
+--- PASS: TestMoveRowWithFormulasInMovedRow (0.01s)
+=== RUN   TestMoveRowSamePosition
+--- PASS: TestMoveRowSamePosition (0.00s)
+=== RUN   TestMoveColSamePosition
+--- PASS: TestMoveColSamePosition (0.00s)
+=== RUN   TestMoveRowWithAbsoluteReferences
+--- PASS: TestMoveRowWithAbsoluteReferences (0.01s)
+=== RUN   TestMoveColWithAbsoluteReferences
+--- PASS: TestMoveColWithAbsoluteReferences (0.00s)
+=== RUN   TestMoveRows
+--- PASS: TestMoveRows (0.01s)
+=== RUN   TestMoveRowsUp
+--- PASS: TestMoveRowsUp (0.01s)
+=== RUN   TestMoveRowsSamePosition
+--- PASS: TestMoveRowsSamePosition (0.00s)
+=== RUN   TestMoveCols
+--- PASS: TestMoveCols (0.00s)
+=== RUN   TestMoveColsLeft
+--- PASS: TestMoveColsLeft (0.00s)
+=== RUN   TestMoveColsSamePosition
+--- PASS: TestMoveColsSamePosition (0.00s)
+=== RUN   TestNumFmt
+--- PASS: TestNumFmt (0.04s)
+=== RUN   TestAddPicture
+--- PASS: TestAddPicture (0.01s)
+=== RUN   TestAddPictureErrors
+--- PASS: TestAddPictureErrors (0.01s)
+=== RUN   TestGetPicture
+--- PASS: TestGetPicture (0.01s)
+=== RUN   TestAddDrawingPicture
+--- PASS: TestAddDrawingPicture (0.00s)
+=== RUN   TestAddPictureFromBytes
+--- PASS: TestAddPictureFromBytes (0.00s)
+=== RUN   TestDeletePicture
+--- PASS: TestDeletePicture (0.01s)
+=== RUN   TestDrawingResize
+--- PASS: TestDrawingResize (0.00s)
+=== RUN   TestSetContentTypePartRelsExtensions
+--- PASS: TestSetContentTypePartRelsExtensions (0.00s)
+=== RUN   TestSetContentTypePartImageExtensions
+--- PASS: TestSetContentTypePartImageExtensions (0.00s)
+=== RUN   TestSetContentTypePartVMLExtensions
+--- PASS: TestSetContentTypePartVMLExtensions (0.00s)
+=== RUN   TestAddContentTypePart
+--- PASS: TestAddContentTypePart (0.00s)
+=== RUN   TestGetPictureCells
+--- PASS: TestGetPictureCells (0.00s)
+=== RUN   TestExtractDecodeCellAnchor
+--- PASS: TestExtractDecodeCellAnchor (0.00s)
+=== RUN   TestGetCellImages
+--- PASS: TestGetCellImages (0.00s)
+=== RUN   TestGetImageCells
+--- PASS: TestGetImageCells (0.00s)
+=== RUN   TestPivotTable
+--- PASS: TestPivotTable (0.01s)
+=== RUN   TestPivotTableDataRange
+=== RUN   TestPivotTableDataRange/data_range_with_empty_column
+--- PASS: TestPivotTableDataRange (0.00s)
+    --- PASS: TestPivotTableDataRange/data_range_with_empty_column (0.00s)
+=== RUN   TestParseFormatPivotTableSet
+--- PASS: TestParseFormatPivotTableSet (0.00s)
+=== RUN   TestAddPivotRowFields
+--- PASS: TestAddPivotRowFields (0.00s)
+=== RUN   TestAddPivotPageFields
+--- PASS: TestAddPivotPageFields (0.00s)
+=== RUN   TestAddPivotDataFields
+--- PASS: TestAddPivotDataFields (0.00s)
+=== RUN   TestAddPivotColFields
+--- PASS: TestAddPivotColFields (0.00s)
+=== RUN   TestGetPivotFieldsOrder
+--- PASS: TestGetPivotFieldsOrder (0.00s)
+=== RUN   TestGetPivotTableFieldName
+--- PASS: TestGetPivotTableFieldName (0.00s)
+=== RUN   TestGetPivotTableFieldOptions
+--- PASS: TestGetPivotTableFieldOptions (0.00s)
+=== RUN   TestGenPivotCacheDefinitionID
+--- PASS: TestGenPivotCacheDefinitionID (0.00s)
+=== RUN   TestDeleteWorkbookPivotCache
+--- PASS: TestDeleteWorkbookPivotCache (0.00s)
+=== RUN   TestGetFormulasSharedFormulas
+    rows_getformulas_shared_test.go:40: GetFormulas returned row with 5 columns: [ MAX('Sheet2'!A:A) B1-1 C1-1 D1-1]
+    rows_getformulas_shared_test.go:63: Column 4: 'D1-1' ✓
+    rows_getformulas_shared_test.go:63: Column 0: '' ✓
+    rows_getformulas_shared_test.go:63: Column 1: 'MAX('Sheet2'!A:A)' ✓
+    rows_getformulas_shared_test.go:63: Column 2: 'B1-1' ✓
+    rows_getformulas_shared_test.go:63: Column 3: 'C1-1' ✓
+    rows_getformulas_shared_test.go:78: 
+        ✓ Shared formulas expanded correctly
+--- PASS: TestGetFormulasSharedFormulas (0.00s)
+=== RUN   TestGetFormulasPerformance
+    rows_getformulas_shared_test.go:128: ✓ GetFormulas processed 2600 formulas successfully
+--- PASS: TestGetFormulasPerformance (0.01s)
+=== RUN   TestGetFormulasMultipleColumns
+    rows_getformulas_test.go:29: 
+        === Test 1: GetCellFormula (逐个查询) ===
+    rows_getformulas_test.go:38: B1: Formula: 'MAX('库存台账-all'!A:A)' ✓
+    rows_getformulas_test.go:38: C1: Formula: 'B1-1' ✓
+    rows_getformulas_test.go:38: D1: Formula: 'C1-1' ✓
+    rows_getformulas_test.go:38: E1: Formula: 'D1-1' ✓
+    rows_getformulas_test.go:42: 
+        === Test 2: GetFormulas (批量查询) ===
+    rows_getformulas_test.go:58: GetFormulas returned row: [ MAX('库存台账-all'!A:A) B1-1 C1-1 D1-1]
+    rows_getformulas_test.go:59: Row length: 5
+    rows_getformulas_test.go:82: Column 2: 'B1-1' ✓
+    rows_getformulas_test.go:82: Column 3: 'C1-1' ✓
+    rows_getformulas_test.go:82: Column 4: 'D1-1' ✓
+    rows_getformulas_test.go:82: Column 0: '' ✓
+    rows_getformulas_test.go:82: Column 1: 'MAX('库存台账-all'!A:A)' ✓
+    rows_getformulas_test.go:98: 
+        ✓ All formulas returned correctly
+--- PASS: TestGetFormulasMultipleColumns (0.00s)
+=== RUN   TestGetFormulasPreservesColumnPositions
+    rows_getformulas_test.go:141: A1: '1+1' ✓
+    rows_getformulas_test.go:141: B1 (empty): '' ✓
+    rows_getformulas_test.go:141: C1: '2+2' ✓
+    rows_getformulas_test.go:141: D1 (empty): '' ✓
+    rows_getformulas_test.go:141: E1: '3+3' ✓
+--- PASS: TestGetFormulasPreservesColumnPositions (0.00s)
+=== RUN   TestGetFormulasEmptySheet
+    rows_getformulas_test.go:160: ✓ Empty sheet handled correctly
+--- PASS: TestGetFormulasEmptySheet (0.00s)
+=== RUN   TestGetFormulasMultipleRows
+    rows_getformulas_test.go:219: ✓ Multiple rows handled correctly
+--- PASS: TestGetFormulasMultipleRows (0.00s)
+=== RUN   TestRowsXMLMarshalNoPanic
+
+=== 测试 xml.Marshal 不 panic ===
+✅ xml.Marshal succeeded, output size: 721 bytes
+--- PASS: TestRowsXMLMarshalNoPanic (0.00s)
+=== RUN   TestRowsGetRowsNoPanic
+
+=== 测试 GetRows 不 panic ===
+✅ GetRows succeeded, got 1 rows
+Row 1: [Data1                         Data26]
+--- PASS: TestRowsGetRowsNoPanic (0.00s)
+=== RUN   TestRowsIteratorNoPanic
+
+=== 测试 Rows 迭代器不 panic ===
+Row 1: 26 columns
+Row 2: 26 columns
+Row 3: 26 columns
+✅ Rows iterator succeeded, processed 10 rows
+--- PASS: TestRowsIteratorNoPanic (0.00s)
+=== RUN   TestCheckRowWithInsertRowsThenGetRows
+
+=== 完整流程：InsertRows + GetRows ===
+✅ InsertRows succeeded
+✅ GetRows succeeded, got 3 rows
+Row 1: 26 columns
+Row 2: 0 columns (inserted)
+Row 3: 26 columns
+--- PASS: TestCheckRowWithInsertRowsThenGetRows (0.00s)
+=== RUN   TestCheckRowWithBatchUpdateThenGetRows
+
+=== BatchUpdate → GetRows ===
+✅ BatchUpdate succeeded
+✅ GetRows succeeded, got 1 rows
+Row 1: 27 columns
+--- PASS: TestCheckRowWithBatchUpdateThenGetRows (0.00s)
+=== RUN   TestGetRows
+--- PASS: TestGetRows (0.00s)
+=== RUN   TestRows
+--- PASS: TestRows (0.00s)
+=== RUN   TestRowsIterator
+--- PASS: TestRowsIterator (0.00s)
+=== RUN   TestRowsGetRowOpts
+--- PASS: TestRowsGetRowOpts (0.00s)
+=== RUN   TestRowsError
+--- PASS: TestRowsError (0.00s)
+=== RUN   TestRowHeight
+--- PASS: TestRowHeight (0.00s)
+=== RUN   TestColumns
+--- PASS: TestColumns (0.00s)
+=== RUN   TestSharedStringsReader
+--- PASS: TestSharedStringsReader (0.00s)
+=== RUN   TestRowVisibility
+--- PASS: TestRowVisibility (0.00s)
+=== RUN   TestRemoveRow
+--- PASS: TestRemoveRow (0.00s)
+=== RUN   TestInsertRows
+--- PASS: TestInsertRows (0.00s)
+=== RUN   TestInsertRowsInEmptyFile
+--- PASS: TestInsertRowsInEmptyFile (0.00s)
+=== RUN   TestDuplicateRowFromSingleRow
+=== RUN   TestDuplicateRowFromSingleRow/FromSingleRow
+--- PASS: TestDuplicateRowFromSingleRow (0.00s)
+    --- PASS: TestDuplicateRowFromSingleRow/FromSingleRow (0.00s)
+=== RUN   TestDuplicateRowUpdateDuplicatedRows
+=== RUN   TestDuplicateRowUpdateDuplicatedRows/UpdateDuplicatedRows
+--- PASS: TestDuplicateRowUpdateDuplicatedRows (0.00s)
+    --- PASS: TestDuplicateRowUpdateDuplicatedRows/UpdateDuplicatedRows (0.00s)
+=== RUN   TestDuplicateRowFirstOfMultipleRows
+=== RUN   TestDuplicateRowFirstOfMultipleRows/FirstOfMultipleRows
+--- PASS: TestDuplicateRowFirstOfMultipleRows (0.00s)
+    --- PASS: TestDuplicateRowFirstOfMultipleRows/FirstOfMultipleRows (0.00s)
+=== RUN   TestDuplicateRowZeroWithNoRows
+=== RUN   TestDuplicateRowZeroWithNoRows/ZeroWithNoRows
+--- PASS: TestDuplicateRowZeroWithNoRows (0.00s)
+    --- PASS: TestDuplicateRowZeroWithNoRows/ZeroWithNoRows (0.00s)
+=== RUN   TestDuplicateRowMiddleRowOfEmptyFile
+=== RUN   TestDuplicateRowMiddleRowOfEmptyFile/MiddleRowOfEmptyFile
+--- PASS: TestDuplicateRowMiddleRowOfEmptyFile (0.00s)
+    --- PASS: TestDuplicateRowMiddleRowOfEmptyFile/MiddleRowOfEmptyFile (0.00s)
+=== RUN   TestDuplicateRowWithLargeOffsetToMiddleOfData
+=== RUN   TestDuplicateRowWithLargeOffsetToMiddleOfData/WithLargeOffsetToMiddleOfData
+--- PASS: TestDuplicateRowWithLargeOffsetToMiddleOfData (0.00s)
+    --- PASS: TestDuplicateRowWithLargeOffsetToMiddleOfData/WithLargeOffsetToMiddleOfData (0.00s)
+=== RUN   TestDuplicateRowWithLargeOffsetToEmptyRows
+=== RUN   TestDuplicateRowWithLargeOffsetToEmptyRows/WithLargeOffsetToEmptyRows
+--- PASS: TestDuplicateRowWithLargeOffsetToEmptyRows (0.00s)
+    --- PASS: TestDuplicateRowWithLargeOffsetToEmptyRows/WithLargeOffsetToEmptyRows (0.00s)
+=== RUN   TestDuplicateRowInsertBefore
+=== RUN   TestDuplicateRowInsertBefore/InsertBefore
+--- PASS: TestDuplicateRowInsertBefore (0.00s)
+    --- PASS: TestDuplicateRowInsertBefore/InsertBefore (0.00s)
+=== RUN   TestDuplicateRowInsertBeforeWithLargeOffset
+=== RUN   TestDuplicateRowInsertBeforeWithLargeOffset/InsertBeforeWithLargeOffset
+--- PASS: TestDuplicateRowInsertBeforeWithLargeOffset (0.00s)
+    --- PASS: TestDuplicateRowInsertBeforeWithLargeOffset/InsertBeforeWithLargeOffset (0.00s)
+=== RUN   TestDuplicateRowInsertBeforeWithMergeCells
+=== RUN   TestDuplicateRowInsertBeforeWithMergeCells/InsertBeforeWithLargeOffset
+--- PASS: TestDuplicateRowInsertBeforeWithMergeCells (0.00s)
+    --- PASS: TestDuplicateRowInsertBeforeWithMergeCells/InsertBeforeWithLargeOffset (0.00s)
+=== RUN   TestDuplicateRowInvalidRowNum
+=== RUN   TestDuplicateRowInvalidRowNum/-100
+=== RUN   TestDuplicateRowInvalidRowNum/-2
+=== RUN   TestDuplicateRowInvalidRowNum/-1
+=== RUN   TestDuplicateRowInvalidRowNum/0
+=== RUN   TestDuplicateRowInvalidRowNum/[-100,-100]
+=== RUN   TestDuplicateRowInvalidRowNum/[-100,-2]
+=== RUN   TestDuplicateRowInvalidRowNum/[-100,-1]
+=== RUN   TestDuplicateRowInvalidRowNum/[-100,0]
+=== RUN   TestDuplicateRowInvalidRowNum/[-2,-100]
+=== RUN   TestDuplicateRowInvalidRowNum/[-2,-2]
+=== RUN   TestDuplicateRowInvalidRowNum/[-2,-1]
+=== RUN   TestDuplicateRowInvalidRowNum/[-2,0]
+=== RUN   TestDuplicateRowInvalidRowNum/[-1,-100]
+=== RUN   TestDuplicateRowInvalidRowNum/[-1,-2]
+=== RUN   TestDuplicateRowInvalidRowNum/[-1,-1]
+=== RUN   TestDuplicateRowInvalidRowNum/[-1,0]
+=== RUN   TestDuplicateRowInvalidRowNum/[0,-100]
+=== RUN   TestDuplicateRowInvalidRowNum/[0,-2]
+=== RUN   TestDuplicateRowInvalidRowNum/[0,-1]
+=== RUN   TestDuplicateRowInvalidRowNum/[0,0]
+--- PASS: TestDuplicateRowInvalidRowNum (0.02s)
+    --- PASS: TestDuplicateRowInvalidRowNum/-100 (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/-2 (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/-1 (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/0 (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-100,-100] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-100,-2] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-100,-1] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-100,0] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-2,-100] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-2,-2] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-2,-1] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-2,0] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-1,-100] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-1,-2] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-1,-1] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[-1,0] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[0,-100] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[0,-2] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[0,-1] (0.00s)
+    --- PASS: TestDuplicateRowInvalidRowNum/[0,0] (0.00s)
+=== RUN   TestDuplicateRow
+--- PASS: TestDuplicateRow (0.00s)
+=== RUN   TestDuplicateRowTo
+--- PASS: TestDuplicateRowTo (0.00s)
+=== RUN   TestDuplicateMergeCells
+--- PASS: TestDuplicateMergeCells (0.00s)
+=== RUN   TestGetValueFromInlineStr
+--- PASS: TestGetValueFromInlineStr (0.00s)
+=== RUN   TestGetValueFromNumber
+--- PASS: TestGetValueFromNumber (0.00s)
+=== RUN   TestErrSheetNotExistError
+--- PASS: TestErrSheetNotExistError (0.00s)
+=== RUN   TestCheckRow
+--- PASS: TestCheckRow (0.00s)
+=== RUN   TestSetRowStyle
+--- PASS: TestSetRowStyle (0.00s)
+=== RUN   TestSetRowHeight
+--- PASS: TestSetRowHeight (0.00s)
+=== RUN   TestNumberFormats
+--- PASS: TestNumberFormats (0.00s)
+=== RUN   TestCellXMLHandler
+--- PASS: TestCellXMLHandler (0.00s)
+=== RUN   TestAddShape
+--- PASS: TestAddShape (0.00s)
+=== RUN   TestAddDrawingShape
+--- PASS: TestAddDrawingShape (0.00s)
+=== RUN   TestNewSheet
+--- PASS: TestNewSheet (0.00s)
+=== RUN   TestPanes
+--- PASS: TestPanes (0.00s)
+=== RUN   TestSearchSheet
+--- PASS: TestSearchSheet (0.00s)
+=== RUN   TestSetPageLayout
+--- PASS: TestSetPageLayout (0.00s)
+=== RUN   TestGetPageLayout
+--- PASS: TestGetPageLayout (0.00s)
+=== RUN   TestHeaderFooter
+--- PASS: TestHeaderFooter (0.00s)
+=== RUN   TestDefinedName
+--- PASS: TestDefinedName (0.00s)
+=== RUN   TestGroupSheets
+--- PASS: TestGroupSheets (0.00s)
+=== RUN   TestUngroupSheets
+--- PASS: TestUngroupSheets (0.00s)
+=== RUN   TestInsertPageBreak
+--- PASS: TestInsertPageBreak (0.00s)
+=== RUN   TestRemovePageBreak
+--- PASS: TestRemovePageBreak (0.00s)
+=== RUN   TestGetSheetName
+--- PASS: TestGetSheetName (0.00s)
+=== RUN   TestGetSheetMap
+--- PASS: TestGetSheetMap (0.00s)
+=== RUN   TestSetActiveSheet
+--- PASS: TestSetActiveSheet (0.00s)
+=== RUN   TestSetSheetName
+--- PASS: TestSetSheetName (0.00s)
+=== RUN   TestWorksheetWriter
+--- PASS: TestWorksheetWriter (0.00s)
+=== RUN   TestGetWorkbookPath
+--- PASS: TestGetWorkbookPath (0.00s)
+=== RUN   TestGetWorkbookRelsPath
+--- PASS: TestGetWorkbookRelsPath (0.00s)
+=== RUN   TestDeleteSheet
+--- PASS: TestDeleteSheet (0.00s)
+=== RUN   TestMoveSheet
+--- PASS: TestMoveSheet (0.00s)
+=== RUN   TestDeleteAndAdjustDefinedNames
+--- PASS: TestDeleteAndAdjustDefinedNames (0.00s)
+=== RUN   TestGetSheetID
+--- PASS: TestGetSheetID (0.00s)
+=== RUN   TestSetSheetVisible
+--- PASS: TestSetSheetVisible (0.00s)
+=== RUN   TestGetSheetVisible
+--- PASS: TestGetSheetVisible (0.00s)
+=== RUN   TestGetSheetIndex
+--- PASS: TestGetSheetIndex (0.00s)
+=== RUN   TestSetContentTypes
+--- PASS: TestSetContentTypes (0.00s)
+=== RUN   TestRemoveContentTypesPart
+--- PASS: TestRemoveContentTypesPart (0.00s)
+=== RUN   TestAttrValToBool
+--- PASS: TestAttrValToBool (0.00s)
+=== RUN   TestAttrValToFloat
+--- PASS: TestAttrValToFloat (0.00s)
+=== RUN   TestSetSheetBackgroundFromBytes
+--- PASS: TestSetSheetBackgroundFromBytes (0.01s)
+=== RUN   TestCheckSheetName
+--- PASS: TestCheckSheetName (0.00s)
+=== RUN   TestSheetDimension
+--- PASS: TestSheetDimension (0.00s)
+=== RUN   TestAddIgnoredErrors
+--- PASS: TestAddIgnoredErrors (0.00s)
+=== RUN   TestSetPageMargins
+--- PASS: TestSetPageMargins (0.00s)
+=== RUN   TestGetPageMargins
+--- PASS: TestGetPageMargins (0.00s)
+=== RUN   TestSetSheetProps
+--- PASS: TestSetSheetProps (0.00s)
+=== RUN   TestGetSheetProps
+--- PASS: TestGetSheetProps (0.00s)
+=== RUN   TestSetView
+--- PASS: TestSetView (0.00s)
+=== RUN   TestGetView
+--- PASS: TestGetView (0.00s)
+=== RUN   TestSlicer
+--- PASS: TestSlicer (0.03s)
+=== RUN   TestAddSheetSlicer
+--- PASS: TestAddSheetSlicer (0.00s)
+=== RUN   TestAddSheetTableSlicer
+--- PASS: TestAddSheetTableSlicer (0.00s)
+=== RUN   TestSetSlicerCache
+--- PASS: TestSetSlicerCache (0.00s)
+=== RUN   TestDeleteSlicer
+--- PASS: TestDeleteSlicer (0.00s)
+=== RUN   TestDeleteSlicerCache
+--- PASS: TestDeleteSlicerCache (0.00s)
+=== RUN   TestAddSlicerCache
+--- PASS: TestAddSlicerCache (0.00s)
+=== RUN   TestAddDrawingSlicer
+--- PASS: TestAddDrawingSlicer (0.00s)
+=== RUN   TestAddWorkbookSlicerCache
+--- PASS: TestAddWorkbookSlicerCache (0.00s)
+=== RUN   TestGenSlicerCacheName
+--- PASS: TestGenSlicerCacheName (0.00s)
+=== RUN   TestAddPivotCacheSlicer
+--- PASS: TestAddPivotCacheSlicer (0.00s)
+=== RUN   TestAddSparkline
+--- PASS: TestAddSparkline (0.01s)
+=== RUN   TestAppendSparkline
+--- PASS: TestAppendSparkline (0.00s)
+=== RUN   TestStreamWriter
+--- PASS: TestStreamWriter (5.35s)
+=== RUN   TestStreamSetColStyle
+--- PASS: TestStreamSetColStyle (0.00s)
+=== RUN   TestStreamSetColWidth
+--- PASS: TestStreamSetColWidth (0.00s)
+=== RUN   TestStreamSetPanes
+--- PASS: TestStreamSetPanes (0.00s)
+=== RUN   TestStreamTable
+--- PASS: TestStreamTable (0.00s)
+=== RUN   TestStreamMergeCells
+--- PASS: TestStreamMergeCells (0.00s)
+=== RUN   TestStreamInsertPageBreak
+--- PASS: TestStreamInsertPageBreak (0.00s)
+=== RUN   TestNewStreamWriter
+--- PASS: TestNewStreamWriter (0.00s)
+=== RUN   TestStreamMarshalAttrs
+--- PASS: TestStreamMarshalAttrs (0.00s)
+=== RUN   TestStreamSetRow
+--- PASS: TestStreamSetRow (0.00s)
+=== RUN   TestStreamSetRowNilValues
+--- PASS: TestStreamSetRowNilValues (0.00s)
+=== RUN   TestStreamSetRowWithStyle
+--- PASS: TestStreamSetRowWithStyle (0.00s)
+=== RUN   TestStreamSetCellValFunc
+--- PASS: TestStreamSetCellValFunc (0.00s)
+=== RUN   TestStreamWriterOutlineLevel
+--- PASS: TestStreamWriterOutlineLevel (0.00s)
+=== RUN   TestStreamWriterReader
+--- PASS: TestStreamWriterReader (0.00s)
+=== RUN   TestStreamWriterGetRowElement
+--- PASS: TestStreamWriterGetRowElement (0.00s)
+=== RUN   TestGetCellStyleReadOnly
+--- PASS: TestGetCellStyleReadOnly (0.00s)
+=== RUN   TestGetCellStyleReadOnlyInheritance
+    styles_readonly_test.go:87: Row style inheritance works: cell A1 inherited style 1 from row
+--- PASS: TestGetCellStyleReadOnlyInheritance (0.00s)
+=== RUN   TestGetCellStyleReadOnlyVsNormal
+    styles_readonly_test.go:134: Behavior comparison:
+    styles_readonly_test.go:135:   Initial rows: 2
+    styles_readonly_test.go:136:   After GetCellStyleReadOnly: 2 (no change ✓)
+    styles_readonly_test.go:137:   After GetCellStyle: 999 (created rows)
+--- PASS: TestGetCellStyleReadOnlyVsNormal (0.00s)
+=== RUN   TestGetCellStyleReadOnlyErrors
+    styles_readonly_test.go:157: Error handling works correctly
+--- PASS: TestGetCellStyleReadOnlyErrors (0.00s)
+=== RUN   TestGetCellStyleReadOnlyPerformance
+    styles_readonly_test.go:234: 
+        === Performance Comparison (10000 iterations) ===
+    styles_readonly_test.go:235: GetCellStyle:         2.365542ms (0.24 μs/op)
+    styles_readonly_test.go:236: GetCellStyleReadOnly: 1.181833ms (0.12 μs/op)
+    styles_readonly_test.go:237: Speedup:              2.00x faster
+    styles_readonly_test.go:243: 
+        === Memory Usage ===
+    styles_readonly_test.go:244: GetCellStyle rows created:         1000
+    styles_readonly_test.go:245: GetCellStyleReadOnly rows created: 0
+--- PASS: TestGetCellStyleReadOnlyPerformance (0.00s)
+=== RUN   TestStyleFill
+--- PASS: TestStyleFill (0.00s)
+=== RUN   TestSetConditionalFormat
+=== RUN   TestSetConditionalFormat/multi_conditional_formatting_rules_priority
+--- PASS: TestSetConditionalFormat (0.00s)
+    --- PASS: TestSetConditionalFormat/multi_conditional_formatting_rules_priority (0.00s)
+=== RUN   TestGetConditionalFormats
+--- PASS: TestGetConditionalFormats (0.01s)
+=== RUN   TestUnsetConditionalFormat
+--- PASS: TestUnsetConditionalFormat (0.00s)
+=== RUN   TestNewStyle
+=== RUN   TestNewStyle/for_create_new_style_with_font_charset
+--- PASS: TestNewStyle (0.00s)
+    --- PASS: TestNewStyle/for_create_new_style_with_font_charset (0.00s)
+=== RUN   TestConditionalStyle
+--- PASS: TestConditionalStyle (0.00s)
+=== RUN   TestGetDefaultFont
+--- PASS: TestGetDefaultFont (0.00s)
+=== RUN   TestSetDefaultFont
+--- PASS: TestSetDefaultFont (0.00s)
+=== RUN   TestStylesReader
+--- PASS: TestStylesReader (0.00s)
+=== RUN   TestThemeReader
+--- PASS: TestThemeReader (0.00s)
+=== RUN   TestSetCellStyle
+--- PASS: TestSetCellStyle (0.00s)
+=== RUN   TestGetStyleID
+--- PASS: TestGetStyleID (0.00s)
+=== RUN   TestGetFillID
+--- PASS: TestGetFillID (0.00s)
+=== RUN   TestThemeColor
+--- PASS: TestThemeColor (0.00s)
+=== RUN   TestGetNumFmtID
+--- PASS: TestGetNumFmtID (0.00s)
+=== RUN   TestGetThemeColor
+--- PASS: TestGetThemeColor (0.00s)
+=== RUN   TestGetStyle
+--- PASS: TestGetStyle (0.00s)
+=== RUN   TestGetCellStylesReadOnly
+--- PASS: TestGetCellStylesReadOnly (0.00s)
+=== RUN   TestGetCellStylesWithDetails
+--- PASS: TestGetCellStylesWithDetails (0.00s)
+=== RUN   TestAddTable
+--- PASS: TestAddTable (0.00s)
+=== RUN   TestGetTables
+--- PASS: TestGetTables (0.00s)
+=== RUN   TestDeleteTable
+--- PASS: TestDeleteTable (0.00s)
+=== RUN   TestSetTableColumns
+--- PASS: TestSetTableColumns (0.00s)
+=== RUN   TestAutoFilter
+=== RUN   TestAutoFilter/Expression1
+=== RUN   TestAutoFilter/Expression2
+=== RUN   TestAutoFilter/Expression3
+=== RUN   TestAutoFilter/Expression4
+=== RUN   TestAutoFilter/Expression5
+=== RUN   TestAutoFilter/Expression6
+=== RUN   TestAutoFilter/Expression7
+=== RUN   TestAutoFilter/Expression8
+=== RUN   TestAutoFilter/Expression9
+--- PASS: TestAutoFilter (0.01s)
+    --- PASS: TestAutoFilter/Expression1 (0.00s)
+    --- PASS: TestAutoFilter/Expression2 (0.00s)
+    --- PASS: TestAutoFilter/Expression3 (0.00s)
+    --- PASS: TestAutoFilter/Expression4 (0.00s)
+    --- PASS: TestAutoFilter/Expression5 (0.00s)
+    --- PASS: TestAutoFilter/Expression6 (0.00s)
+    --- PASS: TestAutoFilter/Expression7 (0.00s)
+    --- PASS: TestAutoFilter/Expression8 (0.00s)
+    --- PASS: TestAutoFilter/Expression9 (0.00s)
+=== RUN   TestAutoFilterError
+=== RUN   TestAutoFilterError/Expression1
+=== RUN   TestAutoFilterError/Expression2
+=== RUN   TestAutoFilterError/Expression3
+=== RUN   TestAutoFilterError/Expression4
+=== RUN   TestAutoFilterError/Expression5
+=== RUN   TestAutoFilterError/Expression6
+--- PASS: TestAutoFilterError (0.01s)
+    --- PASS: TestAutoFilterError/Expression1 (0.00s)
+    --- PASS: TestAutoFilterError/Expression2 (0.00s)
+    --- PASS: TestAutoFilterError/Expression3 (0.00s)
+    --- PASS: TestAutoFilterError/Expression4 (0.00s)
+    --- PASS: TestAutoFilterError/Expression5 (0.00s)
+    --- PASS: TestAutoFilterError/Expression6 (0.00s)
+=== RUN   TestParseFilterTokens
+--- PASS: TestParseFilterTokens (0.00s)
+=== RUN   TestTrimRowWithMixedEmptyRows
+--- PASS: TestTrimRowWithMixedEmptyRows (0.00s)
+=== RUN   TestTrimRowWithAllEmptyRows
+--- PASS: TestTrimRowWithAllEmptyRows (0.00s)
+=== RUN   TestTrimRowWithLargeGaps
+--- PASS: TestTrimRowWithLargeGaps (0.00s)
+=== RUN   TestTrimRowWithAlternatingPattern
+--- PASS: TestTrimRowWithAlternatingPattern (0.00s)
+=== RUN   TestTrimRowMultipleWrites
+--- PASS: TestTrimRowMultipleWrites (0.00s)
+=== RUN   TestTrimRowWithBatchOperations
+--- PASS: TestTrimRowWithBatchOperations (0.00s)
+=== RUN   TestTrimRowEdgeCases
+=== RUN   TestTrimRowEdgeCases/EmptyWorksheet
+=== RUN   TestTrimRowEdgeCases/SingleCell
+=== RUN   TestTrimRowEdgeCases/LastRowOnly
+--- PASS: TestTrimRowEdgeCases (0.00s)
+    --- PASS: TestTrimRowEdgeCases/EmptyWorksheet (0.00s)
+    --- PASS: TestTrimRowEdgeCases/SingleCell (0.00s)
+    --- PASS: TestTrimRowEdgeCases/LastRowOnly (0.00s)
+=== RUN   TestAddComment
+--- PASS: TestAddComment (0.00s)
+=== RUN   TestDeleteComment
+--- PASS: TestDeleteComment (0.00s)
+=== RUN   TestDecodeVMLDrawingReader
+--- PASS: TestDecodeVMLDrawingReader (0.00s)
+=== RUN   TestCommentsReader
+--- PASS: TestCommentsReader (0.00s)
+=== RUN   TestCountComments
+--- PASS: TestCountComments (0.00s)
+=== RUN   TestAddDrawingVML
+--- PASS: TestAddDrawingVML (0.00s)
+=== RUN   TestFormControl
+--- PASS: TestFormControl (0.01s)
+=== RUN   TestExtractFormControl
+--- PASS: TestExtractFormControl (0.00s)
+=== RUN   TestAddHeaderFooterImage
+--- PASS: TestAddHeaderFooterImage (0.01s)
+=== RUN   TestWorkbookProps
+--- PASS: TestWorkbookProps (0.00s)
+=== RUN   TestCalcProps
+--- PASS: TestCalcProps (0.00s)
+=== RUN   TestDeleteWorkbookRels
+--- PASS: TestDeleteWorkbookRels (0.00s)
+=== RUN   TestWorksheetReloadPerformance
+=== RUN   TestWorksheetReloadPerformance/Rows_100
+    worksheet_reload_performance_test.go:22: Creating 100 rows...
+    worksheet_reload_performance_test.go:30:   Create duration: 83.709µs
+    worksheet_reload_performance_test.go:37:   First access (already in memory): 83ns
+    worksheet_reload_performance_test.go:41:   Rows in memory: 100
+    worksheet_reload_performance_test.go:49:   Write duration: 700.792µs
+    worksheet_reload_performance_test.go:50:   Output size: 7294 bytes (0.01 MB)
+    worksheet_reload_performance_test.go:61:   ⚠️ RELOAD duration: 404.417µs
+    worksheet_reload_performance_test.go:71:   Cell access after reload: 6.625µs
+    worksheet_reload_performance_test.go:75: 
+    worksheet_reload_performance_test.go:76: Summary for 100 rows:
+    worksheet_reload_performance_test.go:77:   - Create:       83.709µs
+    worksheet_reload_performance_test.go:78:   - Write:        700.792µs
+    worksheet_reload_performance_test.go:79:   - Reload:       404.417µs (⚠️ Full XML parse)
+    worksheet_reload_performance_test.go:80:   - Reload ratio: 0.58x of Write time
+    worksheet_reload_performance_test.go:81: 
+=== RUN   TestWorksheetReloadPerformance/Rows_1000
+    worksheet_reload_performance_test.go:22: Creating 1000 rows...
+    worksheet_reload_performance_test.go:30:   Create duration: 901.417µs
+    worksheet_reload_performance_test.go:37:   First access (already in memory): 125ns
+    worksheet_reload_performance_test.go:41:   Rows in memory: 1000
+    worksheet_reload_performance_test.go:49:   Write duration: 3.3755ms
+    worksheet_reload_performance_test.go:50:   Output size: 23291 bytes (0.02 MB)
+    worksheet_reload_performance_test.go:61:   ⚠️ RELOAD duration: 3.817125ms
+    worksheet_reload_performance_test.go:71:   Cell access after reload: 4.834µs
+    worksheet_reload_performance_test.go:75: 
+    worksheet_reload_performance_test.go:76: Summary for 1000 rows:
+    worksheet_reload_performance_test.go:77:   - Create:       901.417µs
+    worksheet_reload_performance_test.go:78:   - Write:        3.3755ms
+    worksheet_reload_performance_test.go:79:   - Reload:       3.817125ms (⚠️ Full XML parse)
+    worksheet_reload_performance_test.go:80:   - Reload ratio: 1.13x of Write time
+    worksheet_reload_performance_test.go:81: 
+=== RUN   TestWorksheetReloadPerformance/Rows_10000
+    worksheet_reload_performance_test.go:22: Creating 10000 rows...
+    worksheet_reload_performance_test.go:30:   Create duration: 9.1835ms
+    worksheet_reload_performance_test.go:37:   First access (already in memory): 458ns
+    worksheet_reload_performance_test.go:41:   Rows in memory: 10000
+    worksheet_reload_performance_test.go:49:   Write duration: 30.125875ms
+    worksheet_reload_performance_test.go:50:   Output size: 189293 bytes (0.18 MB)
+    worksheet_reload_performance_test.go:61:   ⚠️ RELOAD duration: 40.536833ms
+    worksheet_reload_performance_test.go:71:   Cell access after reload: 14.083µs
+    worksheet_reload_performance_test.go:75: 
+    worksheet_reload_performance_test.go:76: Summary for 10000 rows:
+    worksheet_reload_performance_test.go:77:   - Create:       9.1835ms
+    worksheet_reload_performance_test.go:78:   - Write:        30.125875ms
+    worksheet_reload_performance_test.go:79:   - Reload:       40.536833ms (⚠️ Full XML parse)
+    worksheet_reload_performance_test.go:80:   - Reload ratio: 1.35x of Write time
+    worksheet_reload_performance_test.go:81: 
+=== RUN   TestWorksheetReloadPerformance/Rows_100000
+    worksheet_reload_performance_test.go:22: Creating 100000 rows...
+    worksheet_reload_performance_test.go:30:   Create duration: 117.321958ms
+    worksheet_reload_performance_test.go:37:   First access (already in memory): 458ns
+    worksheet_reload_performance_test.go:41:   Rows in memory: 100000
+    worksheet_reload_performance_test.go:49:   Write duration: 313.27175ms
+    worksheet_reload_performance_test.go:50:   Output size: 1911342 bytes (1.82 MB)
+    worksheet_reload_performance_test.go:61:   ⚠️ RELOAD duration: 427.5065ms
+    worksheet_reload_performance_test.go:71:   Cell access after reload: 21.166µs
+    worksheet_reload_performance_test.go:75: 
+    worksheet_reload_performance_test.go:76: Summary for 100000 rows:
+    worksheet_reload_performance_test.go:77:   - Create:       117.321958ms
+    worksheet_reload_performance_test.go:78:   - Write:        313.27175ms
+    worksheet_reload_performance_test.go:79:   - Reload:       427.5065ms (⚠️ Full XML parse)
+    worksheet_reload_performance_test.go:80:   - Reload ratio: 1.36x of Write time
+    worksheet_reload_performance_test.go:81: 
+--- PASS: TestWorksheetReloadPerformance (0.95s)
+    --- PASS: TestWorksheetReloadPerformance/Rows_100 (0.00s)
+    --- PASS: TestWorksheetReloadPerformance/Rows_1000 (0.01s)
+    --- PASS: TestWorksheetReloadPerformance/Rows_10000 (0.08s)
+    --- PASS: TestWorksheetReloadPerformance/Rows_100000 (0.86s)
+=== RUN   TestWorksheetReloadVerification
+    worksheet_reload_performance_test.go:106: Initial row count: 1000
+    worksheet_reload_performance_test.go:118: C1 cache before Write: 500500
+    worksheet_reload_performance_test.go:131: Reloaded row count: 1000
+    worksheet_reload_performance_test.go:146: C1 cache after reload: 500500
+--- PASS: TestWorksheetReloadVerification (0.01s)
+=== RUN   TestMultipleWriteReloadCycles
+    worksheet_reload_performance_test.go:182: Cycle 1: SetCellValue (with reload) took 13.841792ms
+    worksheet_reload_performance_test.go:182: Cycle 2: SetCellValue (with reload) took 13.962875ms
+    worksheet_reload_performance_test.go:182: Cycle 3: SetCellValue (with reload) took 14.71275ms
+    worksheet_reload_performance_test.go:182: Cycle 4: SetCellValue (with reload) took 15.481375ms
+    worksheet_reload_performance_test.go:182: Cycle 5: SetCellValue (with reload) took 16.122917ms
+    worksheet_reload_performance_test.go:182: Cycle 6: SetCellValue (with reload) took 16.276708ms
+    worksheet_reload_performance_test.go:182: Cycle 7: SetCellValue (with reload) took 14.951042ms
+    worksheet_reload_performance_test.go:182: Cycle 8: SetCellValue (with reload) took 15.463042ms
+    worksheet_reload_performance_test.go:182: Cycle 9: SetCellValue (with reload) took 15.773458ms
+    worksheet_reload_performance_test.go:182: Cycle 10: SetCellValue (with reload) took 16.365583ms
+    worksheet_reload_performance_test.go:191: 
+    worksheet_reload_performance_test.go:192: Average reload time over 10 cycles: 15.295154ms
+    worksheet_reload_performance_test.go:197:   Cycle 1: 13.841792ms (0.90x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 2: 13.962875ms (0.91x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 3: 14.71275ms (0.96x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 4: 15.481375ms (1.01x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 5: 16.122917ms (1.05x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 6: 16.276708ms (1.06x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 7: 14.951042ms (0.98x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 8: 15.463042ms (1.01x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 9: 15.773458ms (1.03x of average)
+    worksheet_reload_performance_test.go:197:   Cycle 10: 16.365583ms (1.07x of average)
+--- PASS: TestMultipleWriteReloadCycles (0.27s)
+=== RUN   TestWriteModifiesWorksheetState
+
+=== 写入前 ===
+A100 = 'Data100', B100 = '999'
+Row count before Write: 100
+
+Pointer before: 0x140006726c8
+Pointer after:  0x140006726c8
+
+Row count after Write: 2
+⚠️  WARNING: Row count changed! Before=100, After=2
+   trimRow() modified the SheetData.Row array!
+
+=== 写入后 ===
+A100 = 'Data100', B100 = '999'
+--- PASS: TestWriteModifiesWorksheetState (0.00s)
+=== RUN   TestWriteTrimsEmptyRows
+
+=== 写入前的 Row 结构 ===
+Total rows in SheetData.Row: 100
+Row[0]: R=1, cells=1
+Row[4]: R=5, cells=1
+Row[99]: R=100, cells=1
+
+=== 写入后的 Row 结构 ===
+Total rows in SheetData.Row: 3
+Row[0]: R=1, cells=1
+Row[1]: R=5, cells=1
+Row[2]: R=100, cells=1
+
+=== 数据可访问性 ===
+A1 = 'Row1'
+A5 = 'Row5'
+A100 = 'Row100'
+--- PASS: TestWriteTrimsEmptyRows (0.00s)
+=== RUN   TestMultipleWritesModifyState
+
+=== 多次 Write 测试 ===
+Initial pointer: 0x14000362b48
+After Write #1: ptr=0x14000362b48, rows=1, same=true
+After Write #2: ptr=0x14000362b48, rows=1, same=true
+After Write #3: ptr=0x14000362b48, rows=1, same=true
+
+✅ A1 = 'Data' (still accessible)
+--- PASS: TestMultipleWritesModifyState (0.00s)
+=== RUN   TestWriteWithInsertRowsAndBatchUpdate
+
+=== 完整场景测试 ===
+✅ Step 1: InsertRows
+✅ Step 2: BatchUpdate
+✅ Step 3: Write
+✅ Step 4: GetCellValue - A2='Inserted', B2='123'
+✅ Step 5: BatchUpdate after Write
+✅ Step 6: C2='AfterWrite'
+--- PASS: TestWriteWithInsertRowsAndBatchUpdate (0.00s)
+=== RUN   TestWriteUnloadsWorksheet
+--- PASS: TestWriteUnloadsWorksheet (0.00s)
+=== RUN   TestWritePreservesFormulaCacheInXML
+--- PASS: TestWritePreservesFormulaCacheInXML (0.00s)
+=== RUN   TestMultipleWriteCalls
+--- PASS: TestMultipleWriteCalls (0.00s)
+=== RUN   TestSaveAsUnloadsWorksheet
+--- PASS: TestSaveAsUnloadsWorksheet (0.00s)
+=== RUN   ExampleFile_SetCellFloat
+--- PASS: ExampleFile_SetCellFloat (0.00s)
+PASS
+ok  	github.com/xuri/excelize/v2	119.568s
