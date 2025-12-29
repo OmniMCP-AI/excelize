@@ -724,15 +724,12 @@ func (f *File) recalculateAffectedCells(calcChain *xlsxCalcChain, affectedFormul
 
 // RebuildCalcChain 扫描所有工作表的公式并重建 calcChain
 func (f *File) RebuildCalcChain() error {
-	var formulas []FormulaUpdate
+	calcChain := &xlsxCalcChain{}
+	sheetMap := f.GetSheetMap()
 
-	for _, sheetName := range f.GetSheetList() {
+	for sheetID, sheetName := range sheetMap {
 		ws, err := f.workSheetReader(sheetName)
-		if err != nil {
-			continue
-		}
-
-		if ws.SheetData.Row == nil {
+		if err != nil || ws.SheetData.Row == nil {
 			continue
 		}
 
@@ -745,10 +742,9 @@ func (f *File) RebuildCalcChain() error {
 						formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
 					}
 					if formula != "" {
-						formulas = append(formulas, FormulaUpdate{
-							Sheet:   sheetName,
-							Cell:    cell.R,
-							Formula: formula,
+						calcChain.C = append(calcChain.C, xlsxCalcChainC{
+							R: cell.R,
+							I: sheetID,
 						})
 					}
 				}
@@ -756,10 +752,10 @@ func (f *File) RebuildCalcChain() error {
 		}
 	}
 
-	if len(formulas) == 0 {
+	if len(calcChain.C) == 0 {
 		return nil
 	}
 
-	_, err := f.BatchSetFormulasAndRecalculate(formulas)
-	return err
+	f.CalcChain = calcChain
+	return nil
 }
