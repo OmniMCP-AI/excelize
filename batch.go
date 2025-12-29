@@ -554,14 +554,16 @@ func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[s
 
 // formulaReferencesUpdatedCells 检查公式是否引用了被更新的单元格
 func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool) bool {
-	// 检查全列引用（A:A, $A:$A 等）
-	colRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+):(\$?[A-Z]+)`)
+	// 检查全列引用（A:A, $A:$A, 'Sheet'!A:A 等）
+	colRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([A-Za-z_][A-Za-z0-9_.]*!))?(\$?[A-Z]+):(\$?[A-Z]+)`)
 	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
 
 	for _, match := range colMatches {
 		refSheet := currentSheet
 		if match[1] != "" {
-			refSheet = strings.TrimSuffix(match[1], "!")
+			refSheet = match[1] // 单引号表名
+		} else if match[2] != "" {
+			refSheet = strings.TrimSuffix(match[2], "!")
 		}
 
 		// 检查被更新的单元格是否在这个列范围内
@@ -570,8 +572,8 @@ func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updat
 				col, _, err := CellNameToCoordinates(cell)
 				if err == nil {
 					colName, _ := ColumnNumberToName(col)
-					startCol := strings.ReplaceAll(match[2], "$", "")
-					endCol := strings.ReplaceAll(match[3], "$", "")
+					startCol := strings.ReplaceAll(match[3], "$", "")
+					endCol := strings.ReplaceAll(match[4], "$", "")
 
 					// 简单检查：如果列名在范围内
 					if colName >= startCol && colName <= endCol {
@@ -603,14 +605,16 @@ func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updat
 
 // formulaReferencesAffectedCells 检查公式是否引用了受影响的单元格
 func (f *File) formulaReferencesAffectedCells(formula, currentSheet string, affectedCells map[string]bool) bool {
-	// 检查全列引用（A:A, $A:$A 等）
-	colRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+):(\$?[A-Z]+)`)
+	// 检查全列引用（A:A, $A:$A, 'Sheet'!A:A 等）
+	colRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([A-Za-z_][A-Za-z0-9_.]*!))?(\$?[A-Z]+):(\$?[A-Z]+)`)
 	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
 
 	for _, match := range colMatches {
 		refSheet := currentSheet
 		if match[1] != "" {
-			refSheet = strings.TrimSuffix(match[1], "!")
+			refSheet = match[1] // 单引号表名
+		} else if match[2] != "" {
+			refSheet = strings.TrimSuffix(match[2], "!")
 		}
 
 		// 检查受影响的单元格是否在这个列范围内
@@ -621,8 +625,8 @@ func (f *File) formulaReferencesAffectedCells(formula, currentSheet string, affe
 				col, _, err := CellNameToCoordinates(parts[1])
 				if err == nil {
 					colName, _ := ColumnNumberToName(col)
-					startCol := strings.ReplaceAll(match[2], "$", "")
-					endCol := strings.ReplaceAll(match[3], "$", "")
+					startCol := strings.ReplaceAll(match[3], "$", "")
+					endCol := strings.ReplaceAll(match[4], "$", "")
 
 					if colName >= startCol && colName <= endCol {
 						return true
