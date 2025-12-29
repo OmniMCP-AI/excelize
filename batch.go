@@ -1,6 +1,9 @@
 package excelize
 
-import "sync"
+import (
+	"regexp"
+	"strings"
+)
 
 // CellUpdate 表示一个单元格更新操作
 type CellUpdate struct {
@@ -83,8 +86,9 @@ func (f *File) RecalculateSheet(sheet string) error {
 
 // AffectedCell 表示受影响的单元格
 type AffectedCell struct {
-	Sheet string // 工作表名称
-	Cell  string // 单元格坐标
+	Sheet       string // 工作表名称
+	Cell        string // 单元格坐标
+	CachedValue string // 重新计算后的缓存值
 }
 
 // BatchUpdateAndRecalculate 批量更新单元格值并重新计算受影响的公式
@@ -142,13 +146,17 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) ([]AffectedCell, 
 		updatedCells[update.Sheet][update.Cell] = true
 	}
 
-	// 4. 清除所有受影响公式的缓存（包括直接引用和间接引用）
-	// 这样可以确保跨工作表的公式也会被重新计算
-	f.calcCache = sync.Map{} // Clear all calculation cache
+	// 4. 找出所有受影响的公式单元格（通过依赖分析）
+	affectedFormulas := f.findAffectedFormulas(calcChain, updatedCells)
 
-	// 5. 重新计算所有工作表（calcChain 包含所有工作表的公式）
-	// 按 calcChain 顺序计算，确保依赖关系正确
-	return f.recalculateAllSheetsWithTracking(calcChain)
+	// 5. 只清除受影响公式的缓存
+	for cellKey := range affectedFormulas {
+		cacheKey := cellKey + "!raw=false"
+		f.calcCache.Delete(cacheKey)
+	}
+
+	// 6. 重新计算受影响的公式
+	return f.recalculateAffectedCells(calcChain, affectedFormulas)
 }
 
 // BatchSetFormulas 批量设置公式，不触发重新计算
@@ -317,6 +325,9 @@ func (f *File) recalculateAllSheetsWithTracking(calcChain *xlsxCalcChain) ([]Aff
 	currentSheetID := -1
 	var affected []AffectedCell
 
+	// Build dependency graph to find truly affected cells
+	updatedCells := make(map[string]bool) // "Sheet!Cell" -> true
+
 	// Recalculate all cells in calcChain order
 	for i := range calcChain.C {
 		c := calcChain.C[i]
@@ -332,16 +343,237 @@ func (f *File) recalculateAllSheetsWithTracking(calcChain *xlsxCalcChain) ([]Aff
 			continue // Skip if sheet not found
 		}
 
+		cellKey := sheetName + "!" + c.R
+
+		// Check if this cell was recalculated (cache was cleared)
+		cacheKey := cellKey + "!raw=false"
+		_, hadCache := f.calcCache.Load(cacheKey)
+
 		// Recalculate the cell
 		if err := f.recalculateCell(sheetName, c.R); err != nil {
 			// Continue even if one cell fails
 			continue
 		}
 
-		// Track the affected cell
+		// Check if cache was updated (meaning it was recalculated)
+		newValue, hasNewCache := f.calcCache.Load(cacheKey)
+
+		// Only track if this cell was actually recalculated (no cache before, has cache now)
+		if !hadCache && hasNewCache {
+			cachedValue := ""
+			if newValue != nil {
+				cachedValue = newValue.(string)
+			}
+
+			affected = append(affected, AffectedCell{
+				Sheet:       sheetName,
+				Cell:        c.R,
+				CachedValue: cachedValue,
+			})
+			updatedCells[cellKey] = true
+		}
+	}
+
+	return affected, nil
+}
+// findAffectedFormulas 找出所有受影响的公式单元格（包括间接依赖）
+// 通过解析公式中的单元格引用，找出哪些公式依赖于被更新的单元格
+func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[string]map[string]bool) map[string]bool {
+	affected := make(map[string]bool)
+	currentSheetID := -1
+
+	// 第一轮：找出直接依赖
+	for i := range calcChain.C {
+		c := calcChain.C[i]
+		if c.I != 0 {
+			currentSheetID = c.I
+		}
+
+		sheetName := f.GetSheetMap()[currentSheetID]
+		if sheetName == "" {
+			continue
+		}
+
+		// 获取公式内容
+		ws, err := f.workSheetReader(sheetName)
+		if err != nil {
+			continue
+		}
+
+		col, row, _ := CellNameToCoordinates(c.R)
+		cellData := f.getCellFromWorksheet(ws, col, row)
+		if cellData == nil || cellData.F == nil {
+			continue
+		}
+
+		formula := cellData.F.Content
+		if formula == "" && cellData.F.T == STCellFormulaTypeShared && cellData.F.Si != nil {
+			formula, _ = getSharedFormula(ws, *cellData.F.Si, c.R)
+		}
+
+		if formula == "" {
+			continue
+		}
+
+		// 检查公式是否引用了被更新的单元格
+		if f.formulaReferencesUpdatedCells(formula, sheetName, updatedCells) {
+			cellKey := sheetName + "!" + c.R
+			affected[cellKey] = true
+		}
+	}
+
+	// 递归查找间接依赖：如果公式引用了受影响的单元格，它也受影响
+	changed := true
+	for changed {
+		changed = false
+		currentSheetID = -1
+
+		for i := range calcChain.C {
+			c := calcChain.C[i]
+			if c.I != 0 {
+				currentSheetID = c.I
+			}
+
+			sheetName := f.GetSheetMap()[currentSheetID]
+			if sheetName == "" {
+				continue
+			}
+
+			cellKey := sheetName + "!" + c.R
+			if affected[cellKey] {
+				continue // 已经标记为受影响
+			}
+
+			// 获取公式内容
+			ws, err := f.workSheetReader(sheetName)
+			if err != nil {
+				continue
+			}
+
+			col, row, _ := CellNameToCoordinates(c.R)
+			cellData := f.getCellFromWorksheet(ws, col, row)
+			if cellData == nil || cellData.F == nil {
+				continue
+			}
+
+			formula := cellData.F.Content
+			if formula == "" && cellData.F.T == STCellFormulaTypeShared && cellData.F.Si != nil {
+				formula, _ = getSharedFormula(ws, *cellData.F.Si, c.R)
+			}
+
+			if formula == "" {
+				continue
+			}
+
+			// 检查公式是否引用了受影响的单元格
+			if f.formulaReferencesAffectedCells(formula, sheetName, affected) {
+				affected[cellKey] = true
+				changed = true
+			}
+		}
+	}
+
+	return affected
+}
+
+// formulaReferencesUpdatedCells 检查公式是否引用了被更新的单元格
+func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool) bool {
+	// 简单的单元格引用匹配（A1, Sheet1!A1, $A$1 等）
+	cellRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+\$?[0-9]+)`)
+	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
+
+	for _, match := range matches {
+		refSheet := currentSheet
+		if match[1] != "" {
+			refSheet = strings.TrimSuffix(match[1], "!")
+		}
+		refCell := strings.ReplaceAll(match[2], "$", "")
+
+		if updatedCells[refSheet] != nil && updatedCells[refSheet][refCell] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// formulaReferencesAffectedCells 检查公式是否引用了受影响的单元格
+func (f *File) formulaReferencesAffectedCells(formula, currentSheet string, affectedCells map[string]bool) bool {
+	cellRefPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*!)?(\$?[A-Z]+\$?[0-9]+)`)
+	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
+
+	for _, match := range matches {
+		refSheet := currentSheet
+		if match[1] != "" {
+			refSheet = strings.TrimSuffix(match[1], "!")
+		}
+		refCell := strings.ReplaceAll(match[2], "$", "")
+		cellKey := refSheet + "!" + refCell
+
+		if affectedCells[cellKey] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// getCellFromWorksheet 从工作表中获取单元格数据
+func (f *File) getCellFromWorksheet(ws *xlsxWorksheet, col, row int) *xlsxC {
+	for i := range ws.SheetData.Row {
+		if ws.SheetData.Row[i].R == row {
+			for j := range ws.SheetData.Row[i].C {
+				c := &ws.SheetData.Row[i].C[j]
+				cellCol, cellRow, _ := CellNameToCoordinates(c.R)
+				if cellCol == col && cellRow == row {
+					return c
+				}
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// recalculateAffectedCells 只重新计算受影响的单元格
+func (f *File) recalculateAffectedCells(calcChain *xlsxCalcChain, affectedFormulas map[string]bool) ([]AffectedCell, error) {
+	var affected []AffectedCell
+	currentSheetID := -1
+
+	for i := range calcChain.C {
+		c := calcChain.C[i]
+		if c.I != 0 {
+			currentSheetID = c.I
+		}
+
+		sheetName := f.GetSheetMap()[currentSheetID]
+		if sheetName == "" {
+			continue
+		}
+
+		cellKey := sheetName + "!" + c.R
+
+		// 只处理受影响的单元格
+		if !affectedFormulas[cellKey] {
+			continue
+		}
+
+		// 重新计算
+		if err := f.recalculateCell(sheetName, c.R); err != nil {
+			continue
+		}
+
+		// 获取缓存值
+		cacheKey := cellKey + "!raw=false"
+		cachedValue := ""
+		if value, ok := f.calcCache.Load(cacheKey); ok && value != nil {
+			cachedValue = value.(string)
+		}
+
 		affected = append(affected, AffectedCell{
-			Sheet: sheetName,
-			Cell:  c.R,
+			Sheet:       sheetName,
+			Cell:        c.R,
+			CachedValue: cachedValue,
 		})
 	}
 
