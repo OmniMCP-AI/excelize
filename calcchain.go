@@ -16,6 +16,7 @@ import (
 	"encoding/xml"
 	"io"
 	"strconv"
+	"time"
 )
 
 // calcChainReader provides a function to get the pointer to the structure
@@ -391,6 +392,8 @@ func (f *File) recalculateAllInSheet(calcChain *xlsxCalcChain, sheetID int) erro
 
 // recalculateCell recalculates a single formula cell and updates its cache.
 func (f *File) recalculateCell(sheet, cell string) error {
+	calcStart := time.Now()
+
 	ws, err := f.workSheetReader(sheet)
 	if err != nil {
 		return err
@@ -403,11 +406,15 @@ func (f *File) recalculateCell(sheet, cell string) error {
 	}
 
 	var cellRef *xlsxC
+	var formula string
 	for i := range ws.SheetData.Row {
 		if ws.SheetData.Row[i].R == row {
 			for j := range ws.SheetData.Row[i].C {
 				if ws.SheetData.Row[i].C[j].R == cell {
 					cellRef = &ws.SheetData.Row[i].C[j]
+					if cellRef.F != nil {
+						formula = cellRef.F.Content
+					}
 					break
 				}
 			}
@@ -420,8 +427,20 @@ func (f *File) recalculateCell(sheet, cell string) error {
 		return nil
 	}
 
+	// 检查缓存
+	cacheKey := sheet + "!" + cell + "!raw=true"
+	cacheHit := false
+	if _, ok := f.calcCache.Load(cacheKey); ok {
+		cacheHit = true
+	}
+
 	// Calculate the formula value using raw values (not formatted)
 	result, err := f.CalcCellValue(sheet, cell, Options{RawCellValue: true})
+	calcDuration := time.Since(calcStart)
+
+	// 记录统计
+	recordCellCalc(sheet, cell, formula, result, calcDuration, cacheHit)
+
 	if err != nil {
 		// If calculation fails, clear the cache instead of returning error
 		cellRef.V = ""

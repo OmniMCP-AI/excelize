@@ -3,7 +3,83 @@ package excelize
 import (
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
+
+// BatchDebugStats 批量更新的调试统计信息
+type BatchDebugStats struct {
+	TotalCells    int                   // 总计算单元格数
+	CellStats     map[string]*CellStats // 每个单元格的统计
+	TotalDuration time.Duration         // 总耗时
+	CacheHits     int                   // 缓存命中次数
+	CacheMisses   int                   // 缓存未命中次数
+	mu            sync.Mutex            // 保护并发访问
+}
+
+// CellStats 单个单元格的统计信息
+type CellStats struct {
+	Cell         string        // 单元格坐标 (Sheet!Cell)
+	CalcCount    int           // 计算次数
+	CalcDuration time.Duration // 计算总耗时
+	CacheHit     bool          // 是否命中缓存
+	Formula      string        // 公式内容
+	Result       string        // 计算结果
+}
+
+// enableBatchDebug 是否启用批量更新调试
+var enableBatchDebug = false
+
+// currentBatchStats 当前批量更新的统计信息
+var currentBatchStats *BatchDebugStats
+var batchStatsMu sync.Mutex
+
+// EnableBatchDebug 启用批量更新调试统计
+func EnableBatchDebug() {
+	enableBatchDebug = true
+}
+
+// DisableBatchDebug 禁用批量更新调试统计
+func DisableBatchDebug() {
+	enableBatchDebug = false
+}
+
+// GetBatchDebugStats 获取最近一次批量更新的调试统计
+func GetBatchDebugStats() *BatchDebugStats {
+	batchStatsMu.Lock()
+	defer batchStatsMu.Unlock()
+	return currentBatchStats
+}
+
+// recordCellCalc 记录单元格计算
+func recordCellCalc(sheet, cell, formula, result string, duration time.Duration, cacheHit bool) {
+	if !enableBatchDebug || currentBatchStats == nil {
+		return
+	}
+
+	currentBatchStats.mu.Lock()
+	defer currentBatchStats.mu.Unlock()
+
+	cellKey := sheet + "!" + cell
+	if currentBatchStats.CellStats[cellKey] == nil {
+		currentBatchStats.CellStats[cellKey] = &CellStats{
+			Cell:    cellKey,
+			Formula: formula,
+		}
+	}
+
+	stats := currentBatchStats.CellStats[cellKey]
+	stats.CalcCount++
+	stats.CalcDuration += duration
+	stats.CacheHit = cacheHit
+	stats.Result = result
+
+	if cacheHit {
+		currentBatchStats.CacheHits++
+	} else {
+		currentBatchStats.CacheMisses++
+	}
+}
 
 // CellUpdate 表示一个单元格更新操作
 type CellUpdate struct {
@@ -86,6 +162,62 @@ func (f *File) RecalculateSheet(sheet string) error {
 	return f.recalculateAllInSheet(calcChain, sheetID)
 }
 
+// RecalculateAll 重新计算所有工作表中的所有公式并更新缓存值
+//
+// 此函数会遍历 calcChain 中的所有公式单元格，重新计算并更新缓存值。
+// 返回所有重新计算的单元格列表。
+//
+// 返回：
+//
+//	[]AffectedCell: 所有重新计算的单元格列表
+//	error: 错误信息
+//
+// 示例：
+//
+//	affected, err := f.RecalculateAll()
+//	for _, cell := range affected {
+//	    fmt.Printf("%s!%s = %s\n", cell.Sheet, cell.Cell, cell.CachedValue)
+//	}
+func (f *File) RecalculateAll() ([]AffectedCell, error) {
+	calcChain, err := f.calcChainReader()
+	if err != nil {
+		return nil, err
+	}
+
+	if calcChain == nil || len(calcChain.C) == 0 {
+		return nil, nil
+	}
+
+	var affected []AffectedCell
+	sheetList := f.GetSheetList()
+	currentSheetIndex := -1
+
+	for i := range calcChain.C {
+		c := calcChain.C[i]
+		if c.I != 0 {
+			currentSheetIndex = c.I
+		}
+
+		if currentSheetIndex < 0 || currentSheetIndex >= len(sheetList) {
+			continue
+		}
+
+		sheetName := sheetList[currentSheetIndex]
+		if err := f.recalculateCell(sheetName, c.R); err != nil {
+			continue
+		}
+
+		cachedValue, _ := f.GetCellValue(sheetName, c.R)
+		affected = append(affected, AffectedCell{
+			Sheet:       sheetName,
+			Cell:        c.R,
+			CachedValue: cachedValue,
+		})
+	}
+
+	return affected, nil
+}
+
 // AffectedCell 表示受影响的单元格
 type AffectedCell struct {
 	Sheet       string // 工作表名称
@@ -125,6 +257,17 @@ type AffectedCell struct {
 //	// 结果：Sheet1.A1 = 200, Sheet2.B1 = 400 (自动重新计算)
 //	// affected = [{Sheet: "Sheet1", Cell: "B1"}, {Sheet: "Sheet2", Cell: "B1"}]
 func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) ([]AffectedCell, error) {
+	// 初始化调试统计
+	if enableBatchDebug {
+		batchStatsMu.Lock()
+		currentBatchStats = &BatchDebugStats{
+			CellStats: make(map[string]*CellStats),
+		}
+		batchStatsMu.Unlock()
+	}
+
+	batchStart := time.Now()
+
 	// 1. 批量更新所有单元格
 	if err := f.BatchSetCellValue(updates); err != nil {
 		return nil, err
@@ -160,7 +303,15 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) ([]AffectedCell, 
 	}
 
 	// 6. 重新计算受影响的公式
-	return f.recalculateAffectedCells(calcChain, affectedFormulas)
+	affected, err := f.recalculateAffectedCells(calcChain, affectedFormulas)
+
+	// 记录总耗时
+	if enableBatchDebug && currentBatchStats != nil {
+		currentBatchStats.TotalDuration = time.Since(batchStart)
+		currentBatchStats.TotalCells = len(affected)
+	}
+
+	return affected, err
 }
 
 // BatchSetFormulas 批量设置公式，不触发重新计算
