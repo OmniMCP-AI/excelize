@@ -178,9 +178,15 @@ func (f *File) workSheetWriterNonDestructive() {
 		if ws != nil {
 			originalSheet := ws.(*xlsxWorksheet)
 
+			// 🔒 Lock the worksheet to prevent concurrent modifications during copy
+			originalSheet.mu.Lock()
+
 			// 🔥 CRITICAL: Create a DEEP COPY for serialization
 			// This ensures we don't modify the original!
 			sheetCopy := f.deepCopyWorksheet(originalSheet)
+
+			// 🔓 Unlock immediately after copy
+			originalSheet.mu.Unlock()
 
 			// Process merge cells on the copy
 			if sheetCopy.MergeCells != nil && len(sheetCopy.MergeCells.Cells) > 0 {
@@ -229,71 +235,78 @@ func (f *File) deepCopyWorksheet(original *xlsxWorksheet) *xlsxWorksheet {
 	// Create new worksheet
 	copy := &xlsxWorksheet{
 		// Copy basic fields (pointers are OK for these as they won't be modified)
-		SheetPr:               original.SheetPr,
-		Dimension:             original.Dimension,
-		SheetViews:            original.SheetViews,
-		SheetFormatPr:         original.SheetFormatPr,
-		Cols:                  original.Cols,
-		SheetCalcPr:           original.SheetCalcPr,
-		SheetProtection:       original.SheetProtection,
-		ProtectedRanges:       original.ProtectedRanges,
-		Scenarios:             original.Scenarios,
-		AutoFilter:            original.AutoFilter,
-		SortState:             original.SortState,
-		DataConsolidate:       original.DataConsolidate,
-		CustomSheetViews:      original.CustomSheetViews,
-		PhoneticPr:            original.PhoneticPr,
-		ConditionalFormatting: original.ConditionalFormatting,
-		DataValidations:       original.DataValidations,
-		Hyperlinks:            original.Hyperlinks,
-		PrintOptions:          original.PrintOptions,
-		PageMargins:           original.PageMargins,
-		PageSetUp:             original.PageSetUp,
-		HeaderFooter:          original.HeaderFooter,
-		RowBreaks:             original.RowBreaks,
-		ColBreaks:             original.ColBreaks,
-		CustomProperties:      original.CustomProperties,
-		CellWatches:           original.CellWatches,
-		IgnoredErrors:         original.IgnoredErrors,
-		SmartTags:             original.SmartTags,
-		Drawing:               original.Drawing,
-		LegacyDrawing:         original.LegacyDrawing,
-		LegacyDrawingHF:       original.LegacyDrawingHF,
-		DrawingHF:             original.DrawingHF,
-		Picture:               original.Picture,
-		OleObjects:            original.OleObjects,
-		Controls:              original.Controls,
-		WebPublishItems:       original.WebPublishItems,
-		TableParts:            original.TableParts,
-		ExtLst:                original.ExtLst,
-		AlternateContent:      original.AlternateContent,
+		SheetPr:                original.SheetPr,
+		Dimension:              original.Dimension,
+		SheetViews:             original.SheetViews,
+		SheetFormatPr:          original.SheetFormatPr,
+		Cols:                   original.Cols,
+		SheetCalcPr:            original.SheetCalcPr,
+		SheetProtection:        original.SheetProtection,
+		ProtectedRanges:        original.ProtectedRanges,
+		Scenarios:              original.Scenarios,
+		AutoFilter:             original.AutoFilter,
+		SortState:              original.SortState,
+		DataConsolidate:        original.DataConsolidate,
+		CustomSheetViews:       original.CustomSheetViews,
+		PhoneticPr:             original.PhoneticPr,
+		ConditionalFormatting:  original.ConditionalFormatting,
+		DataValidations:        original.DataValidations,
+		Hyperlinks:             original.Hyperlinks,
+		PrintOptions:           original.PrintOptions,
+		PageMargins:            original.PageMargins,
+		PageSetUp:              original.PageSetUp,
+		HeaderFooter:           original.HeaderFooter,
+		RowBreaks:              original.RowBreaks,
+		ColBreaks:              original.ColBreaks,
+		CustomProperties:       original.CustomProperties,
+		CellWatches:            original.CellWatches,
+		IgnoredErrors:          original.IgnoredErrors,
+		SmartTags:              original.SmartTags,
+		Drawing:                original.Drawing,
+		LegacyDrawing:          original.LegacyDrawing,
+		LegacyDrawingHF:        original.LegacyDrawingHF,
+		DrawingHF:              original.DrawingHF,
+		Picture:                original.Picture,
+		OleObjects:             original.OleObjects,
+		Controls:               original.Controls,
+		WebPublishItems:        original.WebPublishItems,
+		TableParts:             original.TableParts,
+		ExtLst:                 original.ExtLst,
+		AlternateContent:       original.AlternateContent,
 		DecodeAlternateContent: original.DecodeAlternateContent,
-		MergeCells:            original.MergeCells,
+		MergeCells:             original.MergeCells,
 	}
 
 	// 🔥 CRITICAL: Deep copy SheetData.Row
 	// This is where trimRow() will operate, so we must copy the entire array
-	copy.SheetData.Row = make([]xlsxRow, len(original.SheetData.Row))
-	for i := range original.SheetData.Row {
-		copy.SheetData.Row[i] = xlsxRow{
-			R:            original.SheetData.Row[i].R,
-			Spans:        original.SheetData.Row[i].Spans,
-			Hidden:       original.SheetData.Row[i].Hidden,
-			Ht:           original.SheetData.Row[i].Ht,
-			CustomHeight: original.SheetData.Row[i].CustomHeight,
-			OutlineLevel: original.SheetData.Row[i].OutlineLevel,
-			Collapsed:    original.SheetData.Row[i].Collapsed,
-			ThickTop:     original.SheetData.Row[i].ThickTop,
-			ThickBot:     original.SheetData.Row[i].ThickBot,
-			Ph:           original.SheetData.Row[i].Ph,
-			S:            original.SheetData.Row[i].S,
-			CustomFormat: original.SheetData.Row[i].CustomFormat,
-		}
+	if original.SheetData.Row != nil {
+		copy.SheetData.Row = make([]xlsxRow, len(original.SheetData.Row))
+		for i := range original.SheetData.Row {
+			copy.SheetData.Row[i] = xlsxRow{
+				R:            original.SheetData.Row[i].R,
+				Spans:        original.SheetData.Row[i].Spans,
+				Hidden:       original.SheetData.Row[i].Hidden,
+				Ht:           original.SheetData.Row[i].Ht,
+				CustomHeight: original.SheetData.Row[i].CustomHeight,
+				OutlineLevel: original.SheetData.Row[i].OutlineLevel,
+				Collapsed:    original.SheetData.Row[i].Collapsed,
+				ThickTop:     original.SheetData.Row[i].ThickTop,
+				ThickBot:     original.SheetData.Row[i].ThickBot,
+				Ph:           original.SheetData.Row[i].Ph,
+				S:            original.SheetData.Row[i].S,
+				CustomFormat: original.SheetData.Row[i].CustomFormat,
+			}
 
-		// Deep copy cells array (this is critical!)
-		copy.SheetData.Row[i].C = make([]xlsxC, len(original.SheetData.Row[i].C))
-		for j := range original.SheetData.Row[i].C {
-			copy.SheetData.Row[i].C[j] = original.SheetData.Row[i].C[j]
+			// Deep copy cells array (this is critical!)
+			// Check for nil to avoid panic in concurrent scenarios
+			if original.SheetData.Row[i].C != nil {
+				cellCount := len(original.SheetData.Row[i].C)
+				copy.SheetData.Row[i].C = make([]xlsxC, cellCount)
+				// Use explicit loop with bounds check to avoid race conditions
+				for j := 0; j < cellCount && j < len(original.SheetData.Row[i].C); j++ {
+					copy.SheetData.Row[i].C[j] = original.SheetData.Row[i].C[j]
+				}
+			}
 		}
 	}
 
