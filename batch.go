@@ -285,16 +285,26 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) ([]AffectedCell, 
 	}
 
 	// 3. 收集所有被更新的单元格（用于依赖检查）
-	updatedCells := make(map[string]map[string]bool) // sheet -> cell -> true
+	// 优化：同时建立列索引，加速列引用检查
+	updatedCells := make(map[string]map[string]bool)   // sheet -> cell -> true
+	updatedColumns := make(map[string]map[string]bool) // sheet -> column -> true
 	for _, update := range updates {
 		if updatedCells[update.Sheet] == nil {
 			updatedCells[update.Sheet] = make(map[string]bool)
+			updatedColumns[update.Sheet] = make(map[string]bool)
 		}
 		updatedCells[update.Sheet][update.Cell] = true
+
+		// 提取列名
+		col, _, err := CellNameToCoordinates(update.Cell)
+		if err == nil {
+			colName, _ := ColumnNumberToName(col)
+			updatedColumns[update.Sheet][colName] = true
+		}
 	}
 
 	// 4. 找出所有受影响的公式单元格（通过依赖分析）
-	affectedFormulas := f.findAffectedFormulas(calcChain, updatedCells)
+	affectedFormulas := f.findAffectedFormulas(calcChain, updatedCells, updatedColumns)
 
 	// 5. 只清除受影响公式的缓存
 	for cellKey := range affectedFormulas {
@@ -421,7 +431,20 @@ func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) ([]Affec
 		return nil, nil
 	}
 
-	affectedFormulas := f.findAffectedFormulas(calcChain, setFormulaCells)
+	// 构建列索引
+	setFormulaColumns := make(map[string]map[string]bool)
+	for sheet, cells := range setFormulaCells {
+		setFormulaColumns[sheet] = make(map[string]bool)
+		for cell := range cells {
+			col, _, err := CellNameToCoordinates(cell)
+			if err == nil {
+				colName, _ := ColumnNumberToName(col)
+				setFormulaColumns[sheet][colName] = true
+			}
+		}
+	}
+
+	affectedFormulas := f.findAffectedFormulas(calcChain, setFormulaCells, setFormulaColumns)
 
 	// 7. 只排除那些不依赖于同批其他公式的被设置单元格
 	// 如果 C1 依赖 B1，且 B1 和 C1 都被设置，则保留 C1
@@ -444,7 +467,7 @@ func (f *File) BatchSetFormulasAndRecalculate(formulas []FormulaUpdate) ([]Affec
 
 					if formula != "" {
 						// 检查公式是否引用了同批的其他单元格
-						isDependentOnOthers = f.formulaReferencesUpdatedCells(formula, sheet, setFormulaCells)
+						isDependentOnOthers = f.formulaReferencesUpdatedCells(formula, sheet, setFormulaCells, setFormulaColumns)
 					}
 				}
 			}
@@ -614,7 +637,7 @@ func (f *File) recalculateAllSheetsWithTracking(calcChain *xlsxCalcChain) ([]Aff
 // findAffectedFormulas 找出所有受影响的公式单元格（包括间接依赖
 // findAffectedFormulas 找出所有受影响的公式单元格（包括间接依赖）
 // 通过解析公式中的单元格引用，找出哪些公式依赖于被更新的单元格
-func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[string]map[string]bool) map[string]bool {
+func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[string]map[string]bool, updatedColumns map[string]map[string]bool) map[string]bool {
 	affected := make(map[string]bool)
 	currentSheetID := -1
 
@@ -652,7 +675,7 @@ func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[s
 		}
 
 		// 检查公式是否引用了被更新的单元格
-		if f.formulaReferencesUpdatedCells(formula, sheetName, updatedCells) {
+		if f.formulaReferencesUpdatedCells(formula, sheetName, updatedCells, updatedColumns) {
 			cellKey := sheetName + "!" + c.R
 			affected[cellKey] = true
 		}
@@ -713,7 +736,7 @@ func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[s
 }
 
 // formulaReferencesUpdatedCells 检查公式是否引用了被更新的单元格
-func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool) bool {
+func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool, updatedColumns map[string]map[string]bool) bool {
 	// 去掉公式两端的单引号（如果有）
 	formula = strings.Trim(formula, "'")
 
@@ -729,19 +752,15 @@ func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updat
 			refSheet = strings.TrimSuffix(match[2], "!")
 		}
 
-		// 检查被更新的单元格是否在这个列范围内
-		if updatedCells[refSheet] != nil {
-			for cell := range updatedCells[refSheet] {
-				col, _, err := CellNameToCoordinates(cell)
-				if err == nil {
-					colName, _ := ColumnNumberToName(col)
-					startCol := strings.ReplaceAll(match[3], "$", "")
-					endCol := strings.ReplaceAll(match[4], "$", "")
+		// 优化：直接检查列索引，而不是遍历所有单元格
+		if updatedColumns[refSheet] != nil {
+			startCol := strings.ReplaceAll(match[3], "$", "")
+			endCol := strings.ReplaceAll(match[4], "$", "")
 
-					// 简单检查：如果列名在范围内
-					if colName >= startCol && colName <= endCol {
-						return true
-					}
+			// 检查是否有更新的列在这个范围内
+			for colName := range updatedColumns[refSheet] {
+				if colName >= startCol && colName <= endCol {
+					return true
 				}
 			}
 		}
@@ -933,9 +952,9 @@ func (f *File) recalculateAffectedCells(calcChain *xlsxCalcChain, affectedFormul
 // RebuildCalcChain 扫描所有工作表的公式并重建 calcChain
 func (f *File) RebuildCalcChain() error {
 	calcChain := &xlsxCalcChain{}
-	sheetMap := f.GetSheetMap()
+	sheetList := f.GetSheetList()
 
-	for sheetID, sheetName := range sheetMap {
+	for sheetIndex, sheetName := range sheetList {
 		ws, err := f.workSheetReader(sheetName)
 		if err != nil || ws.SheetData.Row == nil {
 			continue
@@ -952,7 +971,7 @@ func (f *File) RebuildCalcChain() error {
 					if formula != "" {
 						calcChain.C = append(calcChain.C, xlsxCalcChainC{
 							R: cell.R,
-							I: sheetID,
+							I: sheetIndex,
 						})
 					}
 				}
@@ -961,6 +980,8 @@ func (f *File) RebuildCalcChain() error {
 	}
 
 	if len(calcChain.C) == 0 {
+		// 即使没有公式，也设置一个空的 calcChain
+		f.CalcChain = calcChain
 		return nil
 	}
 
