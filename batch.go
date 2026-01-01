@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -235,10 +236,50 @@ func (f *File) RecalculateAll() error {
 	progressInterval := len(calcChain.C) / 20 // Report every 5% (changed from 10%)
 	slowFormulaCount := 0                     // Track slow formulas (>100ms)
 	timeoutCount := 0                         // Track timeout formulas (>5s)
+	skippedComplexFormulas := 0               // Track skipped complex formulas
+
+	// Track slow formulas with details
+	type slowFormulaInfo struct {
+		sheet    string
+		cell     string
+		duration time.Duration
+		formula  string
+	}
+	slowFormulas := make([]slowFormulaInfo, 0, 100) // Store top 100 slow formulas
+
+	// Helper to insert slow formula in sorted order (by duration descending)
+	insertSlowFormula := func(sf slowFormulaInfo) {
+		// Find insertion position
+		insertPos := len(slowFormulas)
+		for i := 0; i < len(slowFormulas); i++ {
+			if sf.duration > slowFormulas[i].duration {
+				insertPos = i
+				break
+			}
+		}
+
+		// Insert or append
+		if insertPos < len(slowFormulas) {
+			// Insert at position
+			slowFormulas = append(slowFormulas[:insertPos+1], slowFormulas[insertPos:]...)
+			slowFormulas[insertPos] = sf
+		} else if len(slowFormulas) < 100 {
+			// Append if not full
+			slowFormulas = append(slowFormulas, sf)
+		}
+
+		// Keep only top 100
+		if len(slowFormulas) > 100 {
+			slowFormulas = slowFormulas[:100]
+		}
+	}
 
 	// Track columns that have timed out - skip all cells in that column
-	// Map: "SheetName!Column" -> true (e.g., "补货计划!H" -> true)
+	// Map: "SheetName!Column" -> true (e.g., "Sheet1!H" -> true)
 	timeoutColumns := make(map[string]bool)
+
+	// Track columns with circular references detected
+	circularRefColumns := make(map[string]bool)
 
 	for i := range calcChain.C {
 		c := calcChain.C[i]
@@ -255,6 +296,12 @@ func (f *File) RecalculateAll() error {
 		// If sheet changed, rebuild cell map
 		if sheetName != currentSheetName {
 			buildStart := time.Now()
+
+			// 🔥 MEMORY OPTIMIZATION: Clear previous sheet's cellMap to free memory
+			if len(cellMap) > 0 {
+				cellMap = nil // Allow GC to collect old map
+			}
+
 			currentSheetName = sheetName
 			sheetFormulaCount = 0 // Reset counter for new sheet
 			currentWs, err = f.workSheetReader(sheetName)
@@ -263,7 +310,13 @@ func (f *File) RecalculateAll() error {
 			}
 
 			// Build cell map for fast lookup
-			cellMap = make(map[string]*xlsxC)
+			// Pre-allocate with estimated capacity to reduce allocations
+			estimatedCells := 0
+			if currentWs != nil && currentWs.SheetData.Row != nil {
+				estimatedCells = len(currentWs.SheetData.Row) * 50 // Estimate ~50 cells per row
+			}
+			cellMap = make(map[string]*xlsxC, estimatedCells)
+
 			if currentWs != nil && currentWs.SheetData.Row != nil {
 				for rowIdx := range currentWs.SheetData.Row {
 					for cellIdx := range currentWs.SheetData.Row[rowIdx].C {
@@ -294,10 +347,175 @@ func (f *File) RecalculateAll() error {
 			}
 		}
 
-		// Check if this column has already timed out - if so, skip it
 		columnKey := sheetName + "!" + colLetter
+
+		// Check if this column has circular reference
+		if circularRefColumns[columnKey] {
+			cellRef.V = ""
+			cellRef.T = ""
+			formulaCount++
+			skippedComplexFormulas++
+			continue
+		}
+
+		// Get formula content (will be used for circular ref detection and dependency checks)
+		var formula string
+		if cellRef.F.Content != "" {
+			formula = cellRef.F.Content
+		} else if cellRef.F.T == STCellFormulaTypeShared && cellRef.F.Si != nil {
+			formula, _ = getSharedFormula(currentWs, *cellRef.F.Si, c.R)
+		}
+
+		// 🔥 AUTO-DETECT circular reference in formula
+		// IMPORTANT: Only check for self-reference within the SAME sheet
+		// A formula in Sheet1!B2 can reference Sheet2!B2 without circular dependency
+		// Pattern 1: Direct self-reference like "B2", "$B2", "B$2", "$B$2" (WITHOUT sheet prefix)
+		// Pattern 2: INDEX with self cell reference as parameter (e.g., INDEX(..., B2))
+		hasCircularRef := false
+
+		// Only check for circular reference if formula does NOT contain cross-sheet references
+		// If formula has '!' it might be referencing other sheets, need more careful check
+		hasCrossSheetRef := strings.Contains(formula, "!")
+
+		if !hasCrossSheetRef {
+			// No cross-sheet references, safe to check for self-reference
+			// Use word boundary to avoid false positives (e.g., AC2 matching C2)
+			// Match patterns: \bC2\b, \b$C2\b, \bC$2\b, \b$C$2\b
+			selfRefPattern := regexp.MustCompile(`\b\$?` + regexp.QuoteMeta(colLetter) + `\$?` + regexp.QuoteMeta(c.R[len(colLetter):]) + `\b`)
+			if selfRefPattern.MatchString(formula) {
+				hasCircularRef = true
+			}
+
+			// Check for column reference in INDEX/OFFSET that could cause circular dependency
+			// e.g., INDEX(..., colLetter+rowNum) or INDEX(...+H2)
+			if !hasCircularRef && (strings.Contains(formula, "INDEX") || strings.Contains(formula, "OFFSET")) {
+				// Check if cell reference is used as a parameter (not part of range)
+				// Pattern: INDEX(..., +C2) or INDEX(..., C2+...)
+				indexPattern := regexp.MustCompile(`[+\-*/,\(]\s*\$?` + regexp.QuoteMeta(c.R) + `\s*[+\-*/,\)]`)
+				if indexPattern.MatchString(formula) {
+					hasCircularRef = true
+				}
+			}
+		} else {
+			// Has cross-sheet references, need to check more carefully
+			// Only flag as circular if it references the SAME sheet AND cell
+			// Pattern: Sheet!C2 or 'Sheet'!C2 where Sheet is the current sheet
+			selfRef1 := sheetName + "!" + c.R
+			selfRef2 := "'" + sheetName + "'!" + c.R
+
+			if strings.Contains(formula, selfRef1) || strings.Contains(formula, selfRef2) {
+				hasCircularRef = true
+			}
+
+			// Also check for same-sheet plain cell references (without sheet prefix)
+			// IMPORTANT: Prevent false positives like AC2 matching C2
+			// Require: not preceded by letter (to avoid AC2, BC2, etc matching C2)
+			if !hasCircularRef {
+				// Pattern: [^A-Z!\'\"]\$?C\$?2\b
+				// This ensures the cell ref is not part of a longer column name
+				plainCellPattern := regexp.MustCompile(`[^A-Z!\'\"]\$?` + regexp.QuoteMeta(colLetter) + `\$?` + regexp.QuoteMeta(c.R[len(colLetter):]) + `\b`)
+				if plainCellPattern.MatchString(formula) {
+					hasCircularRef = true
+				}
+			}
+		}
+
+		if hasCircularRef {
+			// Mark entire column as having circular reference
+			circularRefColumns[columnKey] = true
+			cellRef.V = ""
+			cellRef.T = ""
+			formulaCount++
+			skippedComplexFormulas++
+
+			// Log first occurrence
+			if len(circularRefColumns) == 1 {
+				log.Printf("  🔄 [RecalculateAll] Circular reference detected: %s!%s (formula references itself)", sheetName, c.R)
+			}
+			continue
+		}
+
+		// Check if this column has already timed out - if so, skip it
 		if timeoutColumns[columnKey] {
 			// Skip this cell silently - column already timed out
+			cellRef.V = ""
+			cellRef.T = ""
+			formulaCount++
+			timeoutCount++
+			continue
+		}
+
+		// Check if this formula depends on any circular-ref columns
+		// If so, skip it to prevent cascading errors
+		dependsOnCircular := false
+		for circularCol := range circularRefColumns {
+			// Extract sheet and column from "SheetName!Column"
+			parts := strings.Split(circularCol, "!")
+			if len(parts) == 2 {
+				circularSheet := parts[0]
+				circularColumn := parts[1]
+
+				// Check if formula references this circular column
+				if circularSheet == sheetName {
+					// Same sheet: check for any reference to the column
+					// Patterns: H2, $H2, H$2, $H$2, H:H, etc.
+					// Use word boundary to avoid false positives (e.g., SH2 should not match H)
+					colPattern := regexp.MustCompile(`\b\$?` + regexp.QuoteMeta(circularColumn) + `[\$:\d]`)
+					if colPattern.MatchString(formula) {
+						dependsOnCircular = true
+						break
+					}
+				} else {
+					// Cross-sheet
+					if strings.Contains(formula, "'"+circularSheet+"'!"+circularColumn) ||
+						strings.Contains(formula, circularSheet+"!"+circularColumn) {
+						dependsOnCircular = true
+						break
+					}
+				}
+			}
+		}
+
+		if dependsOnCircular {
+			// Skip this cell - it depends on a circular column
+			cellRef.V = ""
+			cellRef.T = ""
+			formulaCount++
+			skippedComplexFormulas++
+			continue
+		}
+
+		dependsOnTimeout := false
+		for timeoutCol := range timeoutColumns {
+			// Extract sheet and column from "SheetName!Column"
+			parts := strings.Split(timeoutCol, "!")
+			if len(parts) == 2 {
+				timeoutSheet := parts[0]
+				timeoutColumn := parts[1]
+
+				// Check if formula references this timed-out column
+				// Handle both same-sheet ($H2) and cross-sheet ('Sheet'!H2) references
+				if timeoutSheet == sheetName {
+					// Same sheet: check for $H2, H$2, H2, $H:$H patterns
+					if strings.Contains(formula, timeoutColumn+"$") ||
+						strings.Contains(formula, "$"+timeoutColumn) ||
+						strings.Contains(formula, timeoutColumn+":") {
+						dependsOnTimeout = true
+						break
+					}
+				} else {
+					// Cross-sheet: check for 'Sheet'!H2 pattern
+					if strings.Contains(formula, "'"+timeoutSheet+"'!"+timeoutColumn) ||
+						strings.Contains(formula, timeoutSheet+"!"+timeoutColumn) {
+						dependsOnTimeout = true
+						break
+					}
+				}
+			}
+		}
+
+		if dependsOnTimeout {
+			// Skip this cell - it depends on a timed-out column
 			cellRef.V = ""
 			cellRef.T = ""
 			formulaCount++
@@ -354,6 +572,13 @@ func (f *File) RecalculateAll() error {
 		if timedOut {
 			slowFormulaCount++
 			timeoutCount++
+			// Record timeout formula (always insert - timeouts are the slowest)
+			insertSlowFormula(slowFormulaInfo{
+				sheet:    sheetName,
+				cell:     c.R,
+				duration: 5 * time.Second, // Timeout
+				formula:  truncateString(formula, 100),
+			})
 			// Clear the cell value and continue to next formula
 			cellRef.V = ""
 			cellRef.T = ""
@@ -361,6 +586,13 @@ func (f *File) RecalculateAll() error {
 			continue
 		} else if calcDuration > 100*time.Millisecond {
 			slowFormulaCount++
+			// Record slow formula (insert in sorted order)
+			insertSlowFormula(slowFormulaInfo{
+				sheet:    sheetName,
+				cell:     c.R,
+				duration: calcDuration,
+				formula:  truncateString(formula, 100),
+			})
 		}
 
 		// Check if this was a batch cache hit (very fast calculation)
@@ -407,8 +639,18 @@ func (f *File) RecalculateAll() error {
 			remaining := time.Duration(len(calcChain.C)-formulaCount) * avgPerFormula
 			log.Printf("  ⏳ [RecalculateAll] Progress: %.0f%% (%d/%d), sheet: '%s', elapsed: %v, avg: %v/formula, remaining: ~%v, slow formulas: %d",
 				progress, formulaCount, len(calcChain.C), currentSheetName, elapsed, avgPerFormula, remaining, slowFormulaCount)
+
+			// 🔥 MEMORY OPTIMIZATION: Force GC at progress checkpoints to free memory
+			// This helps prevent OOM on large files (200k+ formulas)
+			if formulaCount%(progressInterval*4) == 0 { // Every 20%
+				runtime.GC()
+			}
 		}
 	}
+
+	// 🔥 MEMORY OPTIMIZATION: Clear cellMap before final GC
+	cellMap = nil
+	currentWs = nil
 
 	totalDuration := time.Since(totalStart)
 	log.Printf("✅ [RecalculateAll] Completed: %d formulas in %v", formulaCount, totalDuration)
@@ -424,11 +666,34 @@ func (f *File) RecalculateAll() error {
 	// Log slow formula statistics
 	if slowFormulaCount > 0 {
 		log.Printf("  ⚠️  Slow formulas detected: %d formulas took >100ms to calculate", slowFormulaCount)
+
+		// Print top slow formulas
+		if len(slowFormulas) > 0 {
+			log.Printf("  📋 Top %d slow formulas:", len(slowFormulas))
+			for i, sf := range slowFormulas {
+				if i >= 20 { // Only show top 20
+					log.Printf("  ... and %d more slow formulas", len(slowFormulas)-20)
+					break
+				}
+				log.Printf("    %2d. %s!%s - %v - %s", i+1, sf.sheet, sf.cell, sf.duration, sf.formula)
+			}
+		}
 	}
 
 	// Log timeout statistics
 	if timeoutCount > 0 {
-		log.Printf("  ⏱️  Timeout formulas: %d formulas exceeded 5s and were skipped", timeoutCount)
+		log.Printf("  ⏱️  Timeout formulas: %d formulas exceeded 5s timeout or depend on timed-out columns", timeoutCount)
+		if len(timeoutColumns) > 0 {
+			log.Printf("  📋 Timed-out columns: %v", timeoutColumns)
+		}
+	}
+
+	// Log skipped complex formulas
+	if skippedComplexFormulas > 0 {
+		log.Printf("  🚫 Skipped formulas with circular references: %d formulas", skippedComplexFormulas)
+		if len(circularRefColumns) > 0 {
+			log.Printf("  📋 Circular reference columns: %v", getMapKeys(circularRefColumns))
+		}
 	}
 
 	// Log batch optimization statistics
@@ -442,6 +707,23 @@ func (f *File) RecalculateAll() error {
 	}
 
 	return nil
+}
+
+// getMapKeys returns keys from a map[string]bool as a slice
+func getMapKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // AffectedCell 表示受影响的单元格

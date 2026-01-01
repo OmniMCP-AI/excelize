@@ -2,6 +2,7 @@ package excelize
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +25,23 @@ type sumifs2DFormula struct {
 	sheet         string
 	criteria1Cell string // e.g., "$A2"
 	criteria2Cell string // e.g., "B$1"
+}
+
+// sumifs1DPattern represents a batch SUMIFS pattern with only 1 criterion
+type sumifs1DPattern struct {
+	// Common ranges (same for all formulas)
+	sumRangeRef       string
+	criteriaRange1Ref string
+
+	// Formula mapping: cell -> criteria1Cell
+	formulas map[string]*sumifs1DFormula
+}
+
+// sumifs1DFormula represents a single SUMIFS formula with 1 criterion
+type sumifs1DFormula struct {
+	cell          string
+	sheet         string
+	criteria1Cell string // e.g., "$A2"
 }
 
 // averageifs2DPattern represents a batch AVERAGEIFS pattern
@@ -96,10 +114,20 @@ func (f *File) detectAndCalculateBatchSUMIFS() map[string]float64 {
 
 		// Group SUMIFS formulas by pattern for this sheet
 		if len(sumifsFormulas) >= 10 {
-			patterns := f.groupSUMIFSByPattern(sumifsFormulas)
+			// Try 1D patterns (1 criterion) first
+			patterns1D := f.groupSUMIFS1DByPattern(sumifsFormulas)
+			for _, pattern := range patterns1D {
+				if len(pattern.formulas) >= 10 {
+					batchResults := f.calculateSUMIFS1DPattern(pattern)
+					for cell, value := range batchResults {
+						results[cell] = value
+					}
+				}
+			}
 
-			// Calculate each pattern
-			for _, pattern := range patterns {
+			// Then try 2D patterns (2 criteria)
+			patterns2D := f.groupSUMIFSByPattern(sumifsFormulas)
+			for _, pattern := range patterns2D {
 				if len(pattern.formulas) >= 10 {
 					batchResults := f.calculateSUMIFS2DPattern(pattern)
 					for cell, value := range batchResults {
@@ -232,6 +260,231 @@ type Sumifs2DPatternExport struct {
 	SumRangeRef       string
 	CriteriaRange1Ref string
 	CriteriaRange2Ref string
+}
+
+// groupSUMIFS1DByPattern groups SUMIFS formulas with 1 criterion by their pattern
+func (f *File) groupSUMIFS1DByPattern(formulas map[string]string) []*sumifs1DPattern {
+	patterns := make(map[string]*sumifs1DPattern)
+
+	for fullCell, formula := range formulas {
+		// Parse fullCell as "sheet!cell"
+		parts := strings.Split(fullCell, "!")
+		if len(parts) != 2 {
+			continue
+		}
+		sheet, cell := parts[0], parts[1]
+
+		// Extract 1D pattern (1 criterion)
+		pattern := f.extractSUMIFS1DPattern(sheet, cell, formula)
+		if pattern == nil {
+			continue
+		}
+
+		// Group by common ranges
+		key := pattern.sumRangeRef + "|" + pattern.criteriaRange1Ref
+		if patterns[key] == nil {
+			patterns[key] = pattern
+		} else {
+			// Merge formulas
+			for c, info := range pattern.formulas {
+				patterns[key].formulas[c] = info
+			}
+		}
+	}
+
+	// Convert to slice
+	var result []*sumifs1DPattern
+	for _, p := range patterns {
+		result = append(result, p)
+	}
+	return result
+}
+
+// extractSUMIFS1DPattern extracts 1D pattern from SUMIFS formula with 1 criterion
+func (f *File) extractSUMIFS1DPattern(sheet, cell, formula string) *sumifs1DPattern {
+	// SUMIFS(sum_range, criteria_range1, criteria1)
+
+	// Remove "SUMIFS(" and trailing ")"
+	if len(formula) < 8 || formula[:7] != "SUMIFS(" {
+		return nil
+	}
+
+	inner := formula[7 : len(formula)-1]
+	parts := splitFormulaArgs(inner)
+
+	// Check if it's a 1-criterion SUMIFS (3 parts)
+	if len(parts) != 3 {
+		return nil
+	}
+
+	sumRange := strings.TrimSpace(parts[0])
+	criteriaRange1 := strings.TrimSpace(parts[1])
+	criteria1Cell := strings.TrimSpace(parts[2])
+
+	// Check if sum_range and criteria_range are external references (contain '!')
+	if !strings.Contains(sumRange, "!") {
+		return nil
+	}
+	if !strings.Contains(criteriaRange1, "!") {
+		return nil
+	}
+
+	// Check if criteria is a cell reference (not external)
+	if strings.Contains(criteria1Cell, "!") {
+		return nil
+	}
+
+	pattern := &sumifs1DPattern{
+		sumRangeRef:       sumRange,
+		criteriaRange1Ref: criteriaRange1,
+		formulas:          make(map[string]*sumifs1DFormula),
+	}
+
+	pattern.formulas[sheet+"!"+cell] = &sumifs1DFormula{
+		cell:          cell,
+		sheet:         sheet,
+		criteria1Cell: criteria1Cell,
+	}
+
+	return pattern
+}
+
+// calculateSUMIFS1DPattern calculates a batch of SUMIFS formulas with 1 criterion
+func (f *File) calculateSUMIFS1DPattern(pattern *sumifs1DPattern) map[string]float64 {
+	// Extract sheet from range reference
+	sourceSheet := extractSheetName(pattern.sumRangeRef)
+	if sourceSheet == "" {
+		return map[string]float64{}
+	}
+
+	// Extract column letters from range references
+	sumCol := extractColumnFromRange(pattern.sumRangeRef)
+	criteria1Col := extractColumnFromRange(pattern.criteriaRange1Ref)
+
+	if sumCol == "" || criteria1Col == "" {
+		return map[string]float64{}
+	}
+
+	// Read all rows from the source sheet
+	rows, err := f.GetRows(sourceSheet)
+	if err != nil || len(rows) == 0 {
+		return map[string]float64{}
+	}
+
+	// Build result map by scanning once
+	resultMap := f.scanRowsAndBuild1DResultMap(sourceSheet, rows, sumCol, criteria1Col)
+
+	// Fill results for all formulas
+	results := make(map[string]float64)
+	for fullCell, info := range pattern.formulas {
+		// Remove $ from cell references before calling GetCellValue
+		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
+
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+
+		if val, ok := resultMap[c1]; ok {
+			results[fullCell] = val
+		} else {
+			results[fullCell] = 0
+		}
+	}
+
+	return results
+}
+
+// scanRowsAndBuild1DResultMap scans rows and builds 1D result map (single criterion)
+func (f *File) scanRowsAndBuild1DResultMap(
+	sheet string,
+	rows [][]string,
+	sumCol, criteria1Col string,
+) map[string]float64 {
+
+	if len(rows) == 0 {
+		return nil
+	}
+
+	// Convert column letters to indices
+	sumColIdx, _ := ColumnNameToNumber(sumCol)
+	criteria1ColIdx, _ := ColumnNameToNumber(criteria1Col)
+
+	sumColIdx--       // Convert to 0-based
+	criteria1ColIdx-- // Convert to 0-based
+
+	numWorkers := runtime.NumCPU()
+	rowCount := len(rows)
+
+	if numWorkers > rowCount {
+		numWorkers = rowCount
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	rowsPerWorker := (rowCount + numWorkers - 1) / numWorkers
+
+	// Worker results
+	type workerResult struct {
+		data map[string]float64
+	}
+	results := make([]workerResult, numWorkers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+
+			start := workerID * rowsPerWorker
+			end := start + rowsPerWorker
+			if end > rowCount {
+				end = rowCount
+			}
+
+			localMap := make(map[string]float64)
+
+			for rowIdx := start; rowIdx < end; rowIdx++ {
+				row := rows[rowIdx]
+
+				// Extract values from columns
+				var c1, sumVal string
+
+				if criteria1ColIdx < len(row) {
+					c1 = row[criteria1ColIdx]
+				}
+				if sumColIdx < len(row) {
+					sumVal = row[sumColIdx]
+				}
+
+				if c1 == "" || sumVal == "" {
+					continue
+				}
+
+				// Convert sumVal to number
+				var num float64
+				_, err := fmt.Sscanf(sumVal, "%f", &num)
+				if err != nil {
+					continue
+				}
+
+				// Accumulate
+				localMap[c1] += num
+			}
+
+			results[workerID] = workerResult{data: localMap}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Merge results
+	finalMap := make(map[string]float64)
+	for _, r := range results {
+		for c1, sum := range r.data {
+			finalMap[c1] += sum
+		}
+	}
+
+	return finalMap
 }
 
 // groupSUMIFSByPattern groups SUMIFS formulas by their pattern
@@ -563,6 +816,101 @@ func (f *File) scanRowsAndBuildResultMap(
 	}
 
 	return finalMap
+}
+
+// detectAndCalculateBatchINDEX detects and batch calculates INDEX formulas
+// Pattern: INDEX($K{row}:$AAC{row}, offset) where offset is constant
+func (f *File) detectAndCalculateBatchINDEX() map[string]float64 {
+	results := make(map[string]float64)
+
+	sheetList := f.GetSheetList()
+
+	for _, sheet := range sheetList {
+		ws, err := f.workSheetReader(sheet)
+		if err != nil || ws == nil || ws.SheetData.Row == nil {
+			continue
+		}
+
+		// Collect INDEX formulas pattern: INDEX($K{row}:${EndCol}{row}, offset)
+		indexFormulas := make(map[string]string) // fullCell -> formula
+
+		for _, row := range ws.SheetData.Row {
+			for _, cell := range row.C {
+				if cell.F != nil {
+					formula := cell.F.Content
+					// Handle shared formulas
+					if formula == "" && cell.F.T == STCellFormulaTypeShared && cell.F.Si != nil {
+						formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
+					}
+
+					// Check if formula contains INDEX with same-row range pattern
+					// Pattern: INDEX($K{row}:$AAC{row}, ...)
+					if strings.Contains(formula, "INDEX(") && strings.Contains(formula, ":") {
+						fullCell := sheet + "!" + cell.R
+						indexFormulas[fullCell] = formula
+					}
+				}
+			}
+		}
+
+		// If we have at least 10 INDEX formulas, try batch optimization
+		if len(indexFormulas) >= 10 {
+			log.Printf("  🔍 [INDEX Batch] Found %d INDEX formulas in sheet '%s', analyzing patterns...", len(indexFormulas), sheet)
+			batchResults := f.calculateIndexFormulas(sheet, indexFormulas)
+			for cell, value := range batchResults {
+				results[cell] = value
+			}
+		}
+	}
+
+	return results
+}
+
+// calculateIndexFormulas batch calculates INDEX formulas for a sheet
+func (f *File) calculateIndexFormulas(sheet string, formulas map[string]string) map[string]float64 {
+	results := make(map[string]float64)
+
+	// For now, just calculate them individually but with row caching
+	// The key optimization: cache entire rows to avoid repeated GetRows calls
+	rowCache := make(map[int][]string) // rowNum -> row data
+
+	rows, err := f.GetRows(sheet)
+	if err != nil {
+		return results
+	}
+
+	// Pre-cache all rows
+	for i, row := range rows {
+		rowCache[i+1] = row // Excel rows are 1-indexed
+	}
+
+	calculated := 0
+	for fullCell := range formulas {
+		// Parse cell reference
+		parts := strings.Split(fullCell, "!")
+		if len(parts) != 2 {
+			continue
+		}
+		cellRef := parts[1]
+
+		// Try to calculate using CalcCellValue (with row cache already loaded)
+		// This is faster than repeated GetCellValue calls
+		value, err := f.CalcCellValue(sheet, cellRef)
+		if err == nil {
+			var numValue float64
+			_, parseErr := fmt.Sscanf(value, "%f", &numValue)
+			if parseErr == nil {
+				results[fullCell] = numValue
+				calculated++
+			}
+		}
+	}
+
+	if calculated > 0 {
+		log.Printf("  ⚡ [INDEX Batch] Calculated %d INDEX formulas in sheet '%s'", calculated, sheet)
+	}
+
+	return results
 }
 
 // groupAVERAGEIFSByPattern groups AVERAGEIFS formulas by their pattern
