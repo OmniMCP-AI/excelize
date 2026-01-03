@@ -154,7 +154,7 @@ func OpenFile(filename string, opts ...Options) (*File, error) {
 // newFile is object builder
 func newFile() *File {
 	return &File{
-		options:          &Options{UnzipSizeLimit: UnzipSizeLimit, UnzipXMLSizeLimit: StreamChunkSize},
+		options:          &Options{MaxCalcIterations: 100, UnzipSizeLimit: UnzipSizeLimit, UnzipXMLSizeLimit: StreamChunkSize},
 		xmlAttr:          sync.Map{},
 		checked:          sync.Map{},
 		sheetMap:         make(map[string]string),

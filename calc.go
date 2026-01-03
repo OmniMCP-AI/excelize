@@ -17523,10 +17523,22 @@ func (fn *formulaFuncs) INDEX(argsList *list.List) formulaArg {
 	}
 
 	// 支持返回整行：INDEX(array, row_num, 0)
+	// 或者单行数组的列索引：INDEX(single_row_array, col_num)
 	if colIdx == -1 && rowIdx >= 0 {
 		if array.Type != ArgMatrix {
 			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
+
+		// 特殊处理：如果数组只有1行且只传了2个参数，把第二个参数当作列索引
+		// 这符合 Excel 对单行向量的处理方式
+		// 例如: INDEX($K2:$AAC2, 41) 返回第41列的值
+		if len(array.Matrix) == 1 && argsList.Len() == 2 {
+			if rowIdx >= len(array.Matrix[0]) {
+				return newErrorFormulaArg(formulaErrorREF, "INDEX col_num out of range")
+			}
+			return array.Matrix[0][rowIdx]
+		}
+
 		if rowIdx >= len(array.Matrix) {
 			return newErrorFormulaArg(formulaErrorREF, "INDEX row_num out of range")
 		}
