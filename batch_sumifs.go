@@ -242,6 +242,102 @@ func ExtractSUMIFSFromFormulaExport(formula string) string {
 	return extractSUMIFSFromFormula(formula)
 }
 
+// batchCalculateSUMIFSWithCache performs batch SUMIFS calculation using pre-loaded data cache
+// This is the REAL solution - we modify batch calculation to use cached rows
+func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, dataCache map[string][][]string) map[string]string {
+	results := make(map[string]string)
+
+	// Group formulas by pattern (same logic as batchCalculateSUMIFS)
+	patterns2D := make(map[string]*sumifs2DPattern)
+
+	for fullCell, formula := range formulas {
+		parts := strings.Split(fullCell, "!")
+		if len(parts) != 2 {
+			continue
+		}
+
+		sheet := parts[0]
+		cell := parts[1]
+
+		// Try to extract 2D SUMIFS pattern
+		pattern := f.extractSUMIFS2DPattern(sheet, cell, formula)
+		if pattern != nil {
+			key := pattern.sumRangeRef + "|" + pattern.criteriaRange1Ref + "|" + pattern.criteriaRange2Ref
+			if _, exists := patterns2D[key]; !exists {
+				patterns2D[key] = pattern
+			} else {
+				for k, v := range pattern.formulas {
+					patterns2D[key].formulas[k] = v
+				}
+			}
+		}
+	}
+
+	// Calculate each pattern using cached data
+	for _, pattern := range patterns2D {
+		// 关键修改：使用缓存数据而不是调用 GetRows
+		patternResults := f.calculateSUMIFS2DPatternWithCache(pattern, dataCache)
+		for cell, value := range patternResults {
+			results[cell] = fmt.Sprintf("%v", value)
+		}
+	}
+
+	return results
+}
+
+// calculateSUMIFS2DPatternWithCache calculates SUMIFS using cached row data
+func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, dataCache map[string][][]string) map[string]float64 {
+	sourceSheet := extractSheetName(pattern.sumRangeRef)
+	if sourceSheet == "" {
+		return map[string]float64{}
+	}
+
+	sumCol := extractColumnFromRange(pattern.sumRangeRef)
+	criteria1Col := extractColumnFromRange(pattern.criteriaRange1Ref)
+	criteria2Col := extractColumnFromRange(pattern.criteriaRange2Ref)
+
+	if sumCol == "" || criteria1Col == "" || criteria2Col == "" {
+		return map[string]float64{}
+	}
+
+	// 关键优化：使用缓存的数据！
+	rows, exists := dataCache[sourceSheet]
+	if !exists {
+		// 如果缓存中没有，降级到读取（但这不应该发生）
+		var err error
+		rows, err = f.GetRows(sourceSheet)
+		if err != nil || len(rows) == 0 {
+			return map[string]float64{}
+		}
+	}
+
+	// Build result map by scanning once (使用缓存数据)
+	resultMap := f.scanRowsAndBuildResultMap(sourceSheet, rows, sumCol, criteria1Col, criteria2Col)
+
+	// Fill results for all formulas
+	results := make(map[string]float64)
+	for fullCell, info := range pattern.formulas {
+		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
+		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
+
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
+
+		if resultMap[c1] != nil {
+			if val, ok := resultMap[c1][c2]; ok {
+				results[fullCell] = val
+			} else {
+				results[fullCell] = 0
+			}
+		} else {
+			results[fullCell] = 0
+		}
+	}
+
+	return results
+}
+
+
 // TestExtractSUMIFS2DPattern is exported for testing
 func TestExtractSUMIFS2DPattern(f *File, sheet, cell, formula string) *Sumifs2DPatternExport {
 	pattern := f.extractSUMIFS2DPattern(sheet, cell, formula)

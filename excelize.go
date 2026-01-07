@@ -168,7 +168,7 @@ func newFile() *File {
 		Relationships:    sync.Map{},
 		CharsetReader:    charset.NewReaderLabel,
 		ZipWriter:        func(w io.Writer) ZipWriter { return zip.NewWriter(w) },
-		rangeCache:       newLRUCache(50), // Limit to 50 range matrices to control memory
+		rangeCache:       newLRUCache(100000), // Increased capacity to 100k to support large-scale preloaded ranges
 	}
 }
 

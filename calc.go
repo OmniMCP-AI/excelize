@@ -16,6 +16,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/big"
 	"math/cmplx"
@@ -28,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -244,6 +246,7 @@ type calcContext struct {
 	maxCalcIterations uint
 	iterations        map[string]uint
 	iterationsCache   map[string]formulaArg
+	rangeCache        map[string]formulaArg // Cache for range references like "$K2:$AAC2"
 }
 
 // cellRef defines the structure of a cell reference.
@@ -869,6 +872,7 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		maxCalcIterations: options.MaxCalcIterations,
 		iterations:        make(map[string]uint),
 		iterationsCache:   make(map[string]formulaArg),
+		rangeCache:        make(map[string]formulaArg),
 	}, sheet, cell); err != nil {
 		result = token.String
 		return
@@ -2406,17 +2410,23 @@ func (f *File) clearCellCache(sheet, cell string) {
 // rangeResolverParallel reads cell values in parallel for large ranges
 // Only used when numRows >= parallelThreshold to avoid goroutine overhead
 func (f *File) rangeResolverParallel(ctx *calcContext, sheet string, ws *xlsxWorksheet, valueRange []int) ([][]formulaArg, error) {
-	const parallelThreshold = 100 // 小于100行不并行
+	const parallelThreshold = 100 // Threshold for parallel processing
 
 	numRows := valueRange[1] - valueRange[0] + 1
 	numCols := valueRange[3] - valueRange[2] + 1
 
-	// 小数据集使用串行
+	// For wide ranges (many columns, few rows), parallelize by columns
+	// Example: 1 row x 695 columns (like $K2:$AAC2)
+	if numRows < parallelThreshold && numCols >= parallelThreshold {
+		return f.rangeResolverParallelCols(ctx, sheet, ws, valueRange)
+	}
+
+	// For small datasets, use serial
 	if numRows < parallelThreshold {
 		return f.rangeResolverSerial(ctx, sheet, ws, valueRange)
 	}
 
-	// 并行读取
+	// For tall ranges (many rows), parallelize by rows
 	matrix := make([][]formulaArg, numRows)
 	for i := range matrix {
 		matrix[i] = make([]formulaArg, numCols)
@@ -2483,6 +2493,138 @@ func (f *File) rangeResolverParallel(ctx *calcContext, sheet string, ws *xlsxWor
 	return matrix, nil
 }
 
+// rangeResolverParallelCols parallelizes by columns for wide ranges (many columns, few rows)
+func (f *File) rangeResolverParallelCols(ctx *calcContext, sheet string, ws *xlsxWorksheet, valueRange []int) ([][]formulaArg, error) {
+	numRows := valueRange[1] - valueRange[0] + 1
+	numCols := valueRange[3] - valueRange[2] + 1
+
+	// For single row, use optimized single-row reader
+	if numRows == 1 {
+		return f.rangeResolverSingleRow(ctx, sheet, ws, valueRange)
+	}
+
+	matrix := make([][]formulaArg, numRows)
+	for i := range matrix {
+		matrix[i] = make([]formulaArg, numCols)
+	}
+
+	numWorkers := min(runtime.NumCPU(), numCols)
+	chunkSize := (numCols + numWorkers - 1) / numWorkers
+
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+
+	for workerID := 0; workerID < numWorkers; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			startCol := valueRange[2] + id*chunkSize
+			endCol := min(startCol+chunkSize-1, valueRange[3])
+
+			for row := valueRange[0]; row <= valueRange[1]; row++ {
+				// 获取列最大值
+				colMax := 0
+				if row <= len(ws.SheetData.Row) {
+					rowData := &ws.SheetData.Row[row-1]
+					colMax = min(valueRange[3], len(rowData.C))
+				}
+
+				for col := startCol; col <= endCol; col++ {
+					value := newEmptyFormulaArg()
+					if col <= colMax {
+						cell, err := CoordinatesToCellName(col, row)
+						if err != nil {
+							errMu.Lock()
+							if firstErr == nil {
+								firstErr = err
+							}
+							errMu.Unlock()
+							return
+						}
+
+						value, err = f.cellResolver(ctx, sheet, cell)
+						if err != nil {
+							errMu.Lock()
+							if firstErr == nil {
+								firstErr = err
+							}
+							errMu.Unlock()
+							return
+						}
+					}
+					matrix[row-valueRange[0]][col-valueRange[2]] = value
+				}
+			}
+		}(workerID)
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	return matrix, nil
+}
+
+// rangeResolverSingleRow optimized reader for single-row ranges (e.g., $K2:$AAC2)
+// Instead of calling cellResolver for each cell, it directly accesses the row data
+func (f *File) rangeResolverSingleRow(ctx *calcContext, sheet string, ws *xlsxWorksheet, valueRange []int) ([][]formulaArg, error) {
+	row := valueRange[0]
+	startCol := valueRange[2]
+	endCol := valueRange[3]
+	numCols := endCol - startCol + 1
+
+	matrix := make([][]formulaArg, 1)
+	matrix[0] = make([]formulaArg, numCols)
+
+	// Initialize all cells as empty
+	for i := range matrix[0] {
+		matrix[0][i] = newEmptyFormulaArg()
+	}
+
+	// Check if row exists
+	if row > len(ws.SheetData.Row) || row < 1 {
+		return matrix, nil // Return empty row
+	}
+
+	rowData := &ws.SheetData.Row[row-1]
+
+	// Build a map from column number to cell index for faster lookup
+	colMap := make(map[int]int, len(rowData.C))
+	for idx, cell := range rowData.C {
+		cellRef, _, _, err := parseRef(cell.R)
+		if err != nil {
+			continue
+		}
+		colMap[cellRef.Col] = idx
+	}
+
+	// Read each column value
+	for col := startCol; col <= endCol; col++ {
+		if cellIdx, ok := colMap[col]; ok {
+			_ = cellIdx // cellIdx is used to verify column exists in colMap
+			cellName, err := CoordinatesToCellName(col, row)
+			if err != nil {
+				return nil, err
+			}
+
+			// Get cell value directly without formula calculation
+			// This is faster than cellResolver which may trigger formula evaluation
+			value, err := f.cellResolver(ctx, sheet, cellName)
+			if err != nil {
+				return nil, err
+			}
+			matrix[0][col-startCol] = value
+		}
+		// else: cell is empty, already initialized to newEmptyFormulaArg()
+	}
+
+	return matrix, nil
+}
+
 // rangeResolverSerial is the original serial implementation
 func (f *File) rangeResolverSerial(ctx *calcContext, sheet string, ws *xlsxWorksheet, valueRange []int) ([][]formulaArg, error) {
 	var matrix [][]formulaArg
@@ -2520,6 +2662,7 @@ func (f *File) rangeResolverSerial(ctx *calcContext, sheet string, ws *xlsxWorks
 // be reference A1:B3.
 func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) (arg formulaArg, err error) {
 	arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
+
 	// value range order: from row, to row, from column, to column
 	valueRange := []int{0, 0, 0, 0}
 	var sheet string
@@ -2548,10 +2691,25 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 		// Optimize value range to avoid reading millions of empty cells
 		valueRange = f.optimizeValueRange(sheet, valueRange)
 
-		// Check range cache first
+		// Check context range cache first (faster, per-formula cache)
 		cacheKey := generateRangeCacheKey(sheet, valueRange)
+
+		// Try context cache first (for same formula, multiple range references)
+		if ctx.rangeCache != nil {
+			if cached, ok := ctx.rangeCache[cacheKey]; ok {
+				arg.Matrix = cached.Matrix
+				arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
+				return
+			}
+		}
+
+		// Then check global range cache
 		if cached, ok := f.rangeCache.Load(cacheKey); ok {
 			arg.Matrix = cached.([][]formulaArg)
+			// Store in context cache for next use
+			if ctx.rangeCache != nil {
+				ctx.rangeCache[cacheKey] = arg
+			}
 			arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
 			return
 		}
@@ -2568,10 +2726,16 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 			return
 		}
 
+		// Store in both context cache and global cache
+		if ctx.rangeCache != nil {
+			ctx.rangeCache[cacheKey] = arg
+		}
+
 		// Store result in LRU range cache
 		// Old entries are automatically evicted when capacity is reached
 		// Note: Cache can be cleared at the end of batch calculation in CalcCellValuesDependencyAware
 		f.rangeCache.Store(cacheKey, arg.Matrix)
+
 		return
 	}
 	// extract value from references
@@ -17460,10 +17624,13 @@ func (fn *formulaFuncs) INDEX(argsList *list.List) formulaArg {
 	if argsList.Len() < 2 || argsList.Len() > 3 {
 		return newErrorFormulaArg(formulaErrorVALUE, "INDEX requires 2 or 3 arguments")
 	}
+
 	array := argsList.Front().Value.(formulaArg)
+
 	if array.Type != ArgMatrix && array.Type != ArgList {
 		array = newMatrixFormulaArg([][]formulaArg{{array}})
 	}
+
 	rowArg := argsList.Front().Next().Value.(formulaArg).ToNumber()
 	if rowArg.Type != ArgNumber {
 		return rowArg
@@ -17529,19 +17696,25 @@ func (fn *formulaFuncs) INDEX(argsList *list.List) formulaArg {
 			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
 
-		// 特殊处理：如果数组只有1行且只传了2个参数，把第二个参数当作列索引
-		// 这符合 Excel 对单行向量的处理方式
-		// 例如: INDEX($K2:$AAC2, 41) 返回第41列的值
-		if len(array.Matrix) == 1 && argsList.Len() == 2 {
-			if rowIdx >= len(array.Matrix[0]) {
-				return newErrorFormulaArg(formulaErrorREF, "INDEX col_num out of range")
-			}
-			return array.Matrix[0][rowIdx]
-		}
-
+		// 检查行索引是否超出范围
 		if rowIdx >= len(array.Matrix) {
 			return newErrorFormulaArg(formulaErrorREF, "INDEX row_num out of range")
 		}
+
+		// 特殊处理：如果数组只有1行且只传了2个参数
+		// 这时需要判断：是要返回整行，还是返回该行的某一列
+		//
+		// Excel 的行为：
+		// - INDEX(A1:B1, 1) -> 返回整行 {1, 4}，配合 SUM 使用得到 5
+		// - INDEX(A1:B1, 2) -> row_num 超出范围（只有1行）
+		// - INDEX($K2:$AAC2, 41) -> 如果用在需要单个值的上下文中，返回第41列的值
+		//
+		// 为了兼容这两种用法，我们返回整行（作为矩阵），让上层函数决定如何使用
+		if len(array.Matrix) == 1 && argsList.Len() == 2 {
+			// 返回整行向量
+			return newMatrixFormulaArg([][]formulaArg{array.Matrix[rowIdx]})
+		}
+
 		// 返回行向量（单行的二维数组）
 		return newMatrixFormulaArg([][]formulaArg{array.Matrix[rowIdx]})
 	}
@@ -21286,4 +21459,246 @@ func (fn *formulaFuncs) DISPIMG(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorVALUE, "DISPIMG requires 2 numeric arguments")
 	}
 	return argsList.Front().Value.(formulaArg)
+}
+
+// PreloadColumnRange preloads a large column range into the global range cache
+// This is useful when many formulas access different rows of the same column range
+// Example: J2 accesses K2:AAC2, J3 accesses K3:AAC3, etc.
+// Instead of loading each row separately, we load all rows at once
+func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int) error {
+	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列)",
+		sheet, startRow, startCol, endRow, endCol,
+		endRow-startRow+1, endCol-startCol+1)
+
+	start := time.Now()
+
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+
+	// Build column map for faster lookup (one-time cost)
+	// For each row, we'll create a map from column number to cell value
+	rowColMaps := make([]map[int]int, endRow-startRow+1)
+
+	// First pass: build column index maps for all rows
+	for i, rowIdx := 0, startRow; rowIdx <= endRow; rowIdx, i = rowIdx+1, i+1 {
+		rowColMaps[i] = make(map[int]int)
+		if rowIdx <= len(ws.SheetData.Row) && rowIdx >= 1 {
+			rowData := &ws.SheetData.Row[rowIdx-1]
+			for cellIdx, cell := range rowData.C {
+				cellRef, _, _, err := parseRef(cell.R)
+				if err != nil {
+					continue
+				}
+				// Only store columns in our range
+				if cellRef.Col >= startCol && cellRef.Col <= endCol {
+					rowColMaps[i][cellRef.Col] = cellIdx
+				}
+			}
+		}
+	}
+
+	mapBuildTime := time.Since(start)
+
+	// Second pass: load all cell values and cache each row range
+	numWorkers := runtime.NumCPU()
+	chunkSize := (endRow - startRow + 1 + numWorkers - 1) / numWorkers
+
+	var wg sync.WaitGroup
+	var cachedCount int64
+
+	for workerID := 0; workerID < numWorkers; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			startIdx := id * chunkSize
+			endIdx := min(startIdx+chunkSize-1, endRow-startRow)
+
+			for i := startIdx; i <= endIdx; i++ {
+				rowIdx := startRow + i
+				colMap := rowColMaps[i]
+
+				// Create matrix for this row's column range
+				matrix := make([][]formulaArg, 1)
+				matrix[0] = make([]formulaArg, endCol-startCol+1)
+
+				// Initialize all as empty
+				for j := range matrix[0] {
+					matrix[0][j] = newEmptyFormulaArg()
+				}
+
+				// Fill in actual values
+				var rowData *xlsxRow
+				if rowIdx <= len(ws.SheetData.Row) && rowIdx >= 1 {
+					rowData = &ws.SheetData.Row[rowIdx-1]
+				}
+
+				for col := startCol; col <= endCol; col++ {
+					if rowData != nil {
+						if _, ok := colMap[col]; ok {
+							// For preload, we directly read cell value without formula evaluation
+							// This is much faster than cellResolver which may trigger recursive calculation
+							value := newEmptyFormulaArg()
+
+							// Get the actual cell from rowData
+							if cellIdx, exists := colMap[col]; exists {
+								cell := &rowData.C[cellIdx]
+
+								// Read raw value directly
+								if cell.V != "" {
+									// Cell has a value
+									value = newStringFormulaArg(cell.V)
+								} else if cell.F != nil && cell.F.Content != "" {
+									// Cell has a formula - mark as empty for now
+									// The actual formula will be evaluated when needed
+									value = newEmptyFormulaArg()
+								}
+								// Note: We're not doing full type conversion here
+								// The cached Matrix will be used as-is by INDEX function
+							}
+
+							matrix[0][col-startCol] = value
+						}
+					}
+				}
+
+				// Cache this row range
+				cacheKey := generateRangeCacheKey(sheet, []int{rowIdx, rowIdx, startCol, endCol})
+				f.rangeCache.Store(cacheKey, matrix)
+				atomic.AddInt64(&cachedCount, 1)
+			}
+		}(workerID)
+	}
+
+	wg.Wait()
+
+	elapsed := time.Since(start)
+	log.Printf("✅ [PreloadColumnRange] 完成: 缓存了 %d 个行范围, 耗时: %v (map构建: %v, 数据读取: %v)",
+		cachedCount, elapsed, mapBuildTime, elapsed-mapBuildTime)
+
+	return nil
+}
+
+// detectColumnRangePatterns analyzes formulas to detect column range access patterns
+// Returns a map of sheet -> list of column ranges to preload
+// Example: If many formulas access different rows of K:AAC columns, we should preload the entire K:AAC range
+func (f *File) detectColumnRangePatterns(cells []string) map[string][]columnRangePattern {
+	patterns := make(map[string]map[columnRangeKey]columnRangePattern)
+
+	for _, cell := range cells {
+		parts := strings.Split(cell, "!")
+		if len(parts) != 2 {
+			continue
+		}
+		sheet := parts[0]
+		cellName := parts[1]
+
+		// Get formula
+		formula, err := f.getCellFormulaReadOnly(sheet, cellName, true)
+		if err != nil || formula == "" {
+			continue
+		}
+
+		// Parse formula to find range references
+		// Look for patterns like INDEX($K2:$AAC2, ...) where row number varies
+		ranges := extractRangeReferences(formula)
+		for _, rangeRef := range ranges {
+			// Parse range (e.g., "$K2:$AAC2")
+			if !strings.Contains(rangeRef, ":") {
+				continue
+			}
+
+			parts := strings.Split(rangeRef, ":")
+			if len(parts) != 2 {
+				continue
+			}
+
+			// Remove $ signs
+			startRef := strings.ReplaceAll(parts[0], "$", "")
+			endRef := strings.ReplaceAll(parts[1], "$", "")
+
+			// Parse start and end cell references
+			startCellRef, _, _, err1 := parseRef(startRef)
+			endCellRef, _, _, err2 := parseRef(endRef)
+			if err1 != nil || err2 != nil {
+				continue
+			}
+
+			// Detect horizontal range pattern (single row, many columns)
+			// Example: K2:AAC2 (1 row x 695 columns)
+			if startCellRef.Row == endCellRef.Row && endCellRef.Col-startCellRef.Col >= 50 {
+				// This is a wide horizontal range
+				// Extract the pattern (columns only, ignore row number)
+				key := columnRangeKey{
+					sheet:    sheet,
+					startCol: startCellRef.Col,
+					endCol:   endCellRef.Col,
+				}
+
+				if patterns[sheet] == nil {
+					patterns[sheet] = make(map[columnRangeKey]columnRangePattern)
+				}
+
+				pattern := patterns[sheet][key]
+				pattern.key = key
+				pattern.rows = append(pattern.rows, startCellRef.Row)
+				pattern.count++
+				patterns[sheet][key] = pattern
+			}
+		}
+	}
+
+	// Filter patterns: only preload if accessed from multiple rows
+	result := make(map[string][]columnRangePattern)
+	for sheet, sheetPatterns := range patterns {
+		for _, pattern := range sheetPatterns {
+			// Only preload if pattern is accessed from 10+ different rows
+			if pattern.count >= 10 {
+				result[sheet] = append(result[sheet], pattern)
+			}
+		}
+	}
+
+	return result
+}
+
+// columnRangeKey identifies a unique column range (ignoring row numbers)
+type columnRangeKey struct {
+	sheet    string
+	startCol int
+	endCol   int
+}
+
+// columnRangePattern represents a detected pattern of column range access
+type columnRangePattern struct {
+	key   columnRangeKey
+	rows  []int // List of row numbers that access this column range
+	count int   // Number of formulas accessing this pattern
+}
+
+// extractRangeReferences extracts all range references from a formula
+// Example: "INDEX($K2:$AAC2,1)" -> ["$K2:$AAC2"]
+func extractRangeReferences(formula string) []string {
+	var ranges []string
+
+	// Remove leading =
+	formula = strings.TrimPrefix(formula, "=")
+
+	// Simple regex to find range references
+	// Matches patterns like: A1:B2, $A$1:$B$2, Sheet1!A1:B2, etc.
+	// This is a simplified version; the actual implementation in parseReference is more robust
+	re := regexp.MustCompile(`\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+`)
+	matches := re.FindAllString(formula, -1)
+
+	for _, match := range matches {
+		// Normalize: remove sheet prefix if any (will be handled separately)
+		if idx := strings.Index(match, "!"); idx >= 0 {
+			match = match[idx+1:]
+		}
+		ranges = append(ranges, match)
+	}
+
+	return ranges
 }
