@@ -758,8 +758,35 @@ func formatFloat(value float64) string {
 
 // RecalculateAllWithDependency recalculates all formulas using dependency-based ordering
 // Uses true DAG concurrency - formulas execute as soon as their dependencies are satisfied
+//
+// Thread Safety: This method uses a mutex to prevent concurrent recalculation on the same File object.
+// If called concurrently, subsequent calls will block until the current recalculation completes.
 func (f *File) RecalculateAllWithDependency() error {
+	// Acquire lock to prevent concurrent recalculation
+	f.recalcMu.Lock()
+	defer f.recalcMu.Unlock()
+
 	log.Printf("📊 [RecalculateAll] Starting recalculation with DAG-based concurrent execution")
+
+	// ========================================
+	// 清理旧缓存,避免内存泄漏
+	// ========================================
+	calcCacheCount := 0
+
+	f.calcCache.Range(func(key, value interface{}) bool {
+		f.calcCache.Delete(key)
+		calcCacheCount++
+		return true
+	})
+
+	rangeCacheCount := f.rangeCache.Len()
+	if rangeCacheCount > 0 {
+		f.rangeCache.Clear()
+	}
+
+	if calcCacheCount > 0 || rangeCacheCount > 0 {
+		log.Printf("  🧹 [Cache Cleanup] Cleared %d calcCache entries and %d rangeCache entries", calcCacheCount, rangeCacheCount)
+	}
 
 	// Build dependency graph
 	graph := f.buildDependencyGraph()
@@ -769,6 +796,33 @@ func (f *File) RecalculateAllWithDependency() error {
 
 	log.Printf("✅ [RecalculateAll] Completed")
 	return nil
+}
+
+// ClearFormulaCache clears all formula calculation caches
+// This is useful when you want to manually control cache lifecycle,
+// especially in long-running processes or when processing multiple files.
+//
+// Example usage:
+//   f.SetCellValue("Sheet1", "A1", "new value")
+//   f.ClearFormulaCache()  // Clear old caches before recalculation
+//   f.RecalculateAllWithDependency()
+func (f *File) ClearFormulaCache() {
+	calcCacheCount := 0
+
+	f.calcCache.Range(func(key, value interface{}) bool {
+		f.calcCache.Delete(key)
+		calcCacheCount++
+		return true
+	})
+
+	rangeCacheCount := f.rangeCache.Len()
+	if rangeCacheCount > 0 {
+		f.rangeCache.Clear()
+	}
+
+	if calcCacheCount > 0 || rangeCacheCount > 0 {
+		log.Printf("🧹 [Cache Cleanup] Cleared %d calcCache entries and %d rangeCache entries", calcCacheCount, rangeCacheCount)
+	}
 }
 
 // calculateByDAG executes formulas using per-level batch optimization with shared data cache
@@ -918,9 +972,9 @@ func (f *File) buildDataSourceCache(graph *dependencyGraph) map[string][][]strin
 		}
 	}
 
-	// 一次性读取所有数据源sheet
+	// 一次性读取所有数据源sheet（使用原始值以避免日期格式问题）
 	for sheetName := range sheetsToLoad {
-		rows, err := f.GetRows(sheetName)
+		rows, err := f.getRowsRaw(sheetName)
 		if err == nil && len(rows) > 0 {
 			cache[sheetName] = rows
 			log.Printf("  📦 Cached sheet '%s': %d rows", sheetName, len(rows))
@@ -928,6 +982,61 @@ func (f *File) buildDataSourceCache(graph *dependencyGraph) map[string][][]strin
 	}
 
 	return cache
+}
+
+// getRowsRaw reads all rows from a sheet with raw cell values (unformatted)
+// This is crucial for SUMIFS to match date values correctly
+func (f *File) getRowsRaw(sheet string) ([][]string, error) {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := [][]string{}
+	if ws.SheetData.Row == nil || len(ws.SheetData.Row) == 0 {
+		return rows, nil
+	}
+
+	// Get max dimensions
+	maxRow := 0
+	maxCol := 0
+	for _, row := range ws.SheetData.Row {
+		if int(row.R) > maxRow {
+			maxRow = int(row.R)
+		}
+		for _, cell := range row.C {
+			col, _, _ := CellNameToCoordinates(cell.R)
+			if col > maxCol {
+				maxCol = col
+			}
+		}
+	}
+
+	// Pre-allocate rows
+	for i := 0; i < maxRow; i++ {
+		rows = append(rows, make([]string, maxCol))
+	}
+
+	// Fill in values using raw cell value
+	for _, row := range ws.SheetData.Row {
+		rowIdx := int(row.R) - 1
+		if rowIdx < 0 || rowIdx >= len(rows) {
+			continue
+		}
+
+		for _, cell := range row.C {
+			col, rowNum, _ := CellNameToCoordinates(cell.R)
+			if rowNum-1 != rowIdx || col <= 0 || col > maxCol {
+				continue
+			}
+
+			// Get raw cell value (unformatted)
+			value, _ := f.GetCellValue(sheet, cell.R, Options{RawCellValue: true})
+			rows[rowIdx][col-1] = value
+		}
+	}
+
+	return rows, nil
 }
 
 // batchOptimizeLevelWithCache performs batch SUMIFS and INDEX-MATCH optimization for a specific level using cached data

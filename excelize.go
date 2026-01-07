@@ -30,6 +30,7 @@ import (
 // File define a populated spreadsheet file struct.
 type File struct {
 	mu               sync.Mutex
+	recalcMu         sync.Mutex // Mutex for RecalculateAllWithDependency to prevent concurrent recalculation
 	checked          sync.Map
 	formulaChecked   bool
 	inBatchMode      bool

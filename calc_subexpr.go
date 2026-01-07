@@ -60,6 +60,12 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 		return f.GetCellValue(sheet, cell, opts)
 	}
 
+	// 首先检查 calcCache，看是否已经有完整的计算结果（比如批量计算的结果）
+	cacheKey := fmt.Sprintf("%s!%s!raw=%t", sheet, cell, opts.RawCellValue)
+	if cachedResult, found := f.calcCache.Load(cacheKey); found {
+		return cachedResult.(string), nil
+	}
+
 	// Try to replace ALL SUMIFS/AVERAGEIFS/INDEX-MATCH in the formula with cached values
 	modifiedFormula := formula
 	replacements := 0

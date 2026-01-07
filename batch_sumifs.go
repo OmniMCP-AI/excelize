@@ -8,6 +8,26 @@ import (
 	"sync"
 )
 
+// getCellValueOrCalcCache retrieves cell value, preferring calcCache over worksheet value
+// This is important for formulas that depend on other calculated cells
+func (f *File) getCellValueOrCalcCache(sheet, cell string) string {
+	// 先尝试从 calcCache 读取（优先使用 raw=true 的缓存，因为批量计算用的是这个）
+	cacheKey := fmt.Sprintf("%s!%s!raw=true", sheet, cell)
+	if cachedValue, ok := f.calcCache.Load(cacheKey); ok {
+		return cachedValue.(string)
+	}
+
+	// 如果 calcCache 没有，再尝试不带 raw 的缓存键
+	cacheKey = fmt.Sprintf("%s!%s!raw=false", sheet, cell)
+	if cachedValue, ok := f.calcCache.Load(cacheKey); ok {
+		return cachedValue.(string)
+	}
+
+	// 最后从工作表读取（使用原始值以匹配数据源缓存中的原始值）
+	value, _ := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
+	return value
+}
+
 // sumifs2DPattern represents a batch SUMIFS pattern where formulas form a 2D matrix
 type sumifs2DPattern struct {
 	// Common ranges (same for all formulas)
@@ -320,8 +340,9 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, dataC
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
-		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
+		// 优先从 calcCache 读取计算结果（处理公式单元格依赖）
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
+		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {
@@ -476,7 +497,7 @@ func (f *File) calculateSUMIFS1DPattern(pattern *sumifs1DPattern) map[string]flo
 		// Remove $ from cell references before calling GetCellValue
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
 
 		if val, ok := resultMap[c1]; ok {
 			results[fullCell] = val
@@ -761,8 +782,8 @@ func (f *File) calculateSUMIFS2DPattern(pattern *sumifs2DPattern) map[string]flo
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
-		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
+		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {
@@ -1137,8 +1158,8 @@ func (f *File) calculateAVERAGEIFS2DPattern(pattern *averageifs2DPattern) map[st
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
-		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
+		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
 
 		if resultMap[c1] != nil {
 			if avgData, ok := resultMap[c1][c2]; ok {
