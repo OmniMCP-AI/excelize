@@ -31,6 +31,7 @@ type DAGScheduler struct {
 	numWorkers      int
 	queueClosed     atomic.Bool         // 标记队列是否已关闭
 	subExprCache    *SubExpressionCache // 子表达式缓存（用于复合公式）
+	worksheetCache  *WorksheetCache     // 统一的worksheet缓存（用于存储所有计算结果）
 
 	// Slow formula tracking
 	slowFormulas  []slowFormulaInfo
@@ -91,7 +92,7 @@ func (f *File) NewDAGScheduler(graph *dependencyGraph, numWorkers int, subExprCa
 
 // NewDAGSchedulerForLevel creates a DAG scheduler for a specific level
 // Only formulas within the level are scheduled (dependencies from previous levels are already completed)
-func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, levelCells []string, numWorkers int, subExprCache *SubExpressionCache) *DAGScheduler {
+func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, levelCells []string, numWorkers int, subExprCache *SubExpressionCache, worksheetCache *WorksheetCache) *DAGScheduler {
 	// 创建当前层的公式集合
 	levelCellsMap := make(map[string]bool)
 	for _, cell := range levelCells {
@@ -113,6 +114,7 @@ func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, lev
 		numWorkers:      numWorkers,
 		totalFormulas:   len(levelCells),
 		subExprCache:    subExprCache,
+		worksheetCache:  worksheetCache,
 	}
 
 	// 构建当前层内部的依赖关系
@@ -333,7 +335,12 @@ func (scheduler *DAGScheduler) notifyDependents(completedCell string) {
 
 // writeBackToWorksheet writes calculated value back to worksheet
 func (scheduler *DAGScheduler) writeBackToWorksheet(sheet, cellName, value string) {
-	// 1. 缓存计算结果（用于后续依赖公式读取）
+	// 1. 写入 worksheetCache（优先，因为是统一缓存）
+	if scheduler.worksheetCache != nil {
+		scheduler.worksheetCache.Set(sheet, cellName, value)
+	}
+
+	// 2. 缓存计算结果到 calcCache（用于兼容性）
 	cacheKey := sheet + "!" + cellName
 	arg := newStringFormulaArg(value)
 	scheduler.f.calcCache.Store(cacheKey, arg)
@@ -344,10 +351,10 @@ func (scheduler *DAGScheduler) writeBackToWorksheet(sheet, cellName, value strin
 
 	// DEBUG: 打印日销售表的写入
 	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
-		log.Printf("🔧 [WriteBack] %s!%s = '%s'", sheet, cellName, value)
+		log.Printf("🔧 [WriteBack] %s!%s = '%s' (写入 worksheetCache + calcCache)", sheet, cellName, value)
 	}
 
-	// 2. 写回worksheet的<v>标签，保留公式<f>标签
+	// 3. 写回worksheet的<v>标签，保留公式<f>标签
 	// 这样SaveAs时才能保存正确的计算值
 	scheduler.setFormulaValue(sheet, cellName, value)
 }

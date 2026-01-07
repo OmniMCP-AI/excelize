@@ -175,7 +175,7 @@ func (g *dependencyGraph) assignLevels() {
 			allDepsAssigned := true
 
 			for _, dep := range node.dependencies {
-				depNode, exists := g.nodes[dep];
+				depNode, exists := g.nodes[dep]
 				if !exists {
 					// Dependency is not a formula (data cell), ignore
 					continue
@@ -346,7 +346,7 @@ func extractDependencies(formula, currentSheet, currentCell string) []string {
 							// Check if both parts are just column letters (no row numbers)
 							// This indicates a full column range like A:A or B:B
 							isColumnRange := !strings.ContainsAny(start, "0123456789") &&
-											 !strings.ContainsAny(end, "0123456789")
+								!strings.ContainsAny(end, "0123456789")
 
 							if isColumnRange {
 								// Column range reference: mark as depends on the entire column
@@ -442,7 +442,7 @@ func extractDependenciesWithColumnIndex(formula, currentSheet, currentCell strin
 							// Check if both parts are just column letters (no row numbers)
 							// This indicates a full column range like A:A or B:B
 							isColumnRange := !strings.ContainsAny(start, "0123456789") &&
-											 !strings.ContainsAny(end, "0123456789")
+								!strings.ContainsAny(end, "0123456789")
 
 							if isColumnRange {
 								// Column range reference: expand to all formulas in that column
@@ -490,7 +490,7 @@ func extractDependenciesWithColumnIndex(formula, currentSheet, currentCell strin
 
 						// Check if it's a column range
 						isColumnRange := !strings.ContainsAny(start, "0123456789") &&
-										 !strings.ContainsAny(end, "0123456789")
+							!strings.ContainsAny(end, "0123456789")
 
 						if isColumnRange {
 							// Expand column range on same sheet
@@ -656,8 +656,8 @@ func (f *File) batchCalculateLevel(cells []string, graph *dependencyGraph) (map[
 	subExprCache := NewSubExpressionCache()
 
 	// Group formulas by type
-	pureSUMIFS := make(map[string]string)      // Pure SUMIFS formulas (entire formula is SUMIFS)
-	compositeSUMIFS := make(map[string]string) // Composite formulas containing SUMIFS
+	pureSUMIFS := make(map[string]string)        // Pure SUMIFS formulas (entire formula is SUMIFS)
+	compositeSUMIFS := make(map[string]string)   // Composite formulas containing SUMIFS
 	sumifsExpressions := make(map[string]string) // All SUMIFS expressions to batch calculate
 
 	for _, cell := range cells {
@@ -1014,9 +1014,10 @@ func (f *File) RecalculateAllWithDependency() error {
 // especially in long-running processes or when processing multiple files.
 //
 // Example usage:
-//   f.SetCellValue("Sheet1", "A1", "new value")
-//   f.ClearFormulaCache()  // Clear old caches before recalculation
-//   f.RecalculateAllWithDependency()
+//
+//	f.SetCellValue("Sheet1", "A1", "new value")
+//	f.ClearFormulaCache()  // Clear old caches before recalculation
+//	f.RecalculateAllWithDependency()
 func (f *File) ClearFormulaCache() {
 	calcCacheCount := 0
 
@@ -1112,7 +1113,7 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		// 步骤3：使用 DAG 调度器动态计算当前层
 		// ========================================
 		dagStart := time.Now()
-		scheduler := f.NewDAGSchedulerForLevel(graph, levelIdx, levelCells, numWorkers, subExprCache)
+		scheduler := f.NewDAGSchedulerForLevel(graph, levelIdx, levelCells, numWorkers, subExprCache, worksheetCache)
 		scheduler.Run()
 		dagDuration := time.Since(dagStart)
 
@@ -1271,7 +1272,7 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 	}
 
 	pureSUMIFS := make(map[string]string)              // 纯 SUMIFS：整个公式就是 SUMIFS
-	uniqueSUMIFSExprs := make(map[string][]string)    // 唯一的 SUMIFS 表达式 -> 使用它的单元格列表
+	uniqueSUMIFSExprs := make(map[string][]string)     // 唯一的 SUMIFS 表达式 -> 使用它的单元格列表
 	indexMatchFormulas := make(map[string]string)      // INDEX-MATCH 公式
 	uniqueIndexMatchExprs := make(map[string][]string) // 唯一的 INDEX-MATCH 表达式 -> 使用它的单元格列表
 
@@ -1417,27 +1418,27 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			}
 			cleanExpr := strings.TrimSpace(indexMatchExpr)
 
-			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {
-				// 纯 INDEX-MATCH - 存入 worksheetCache 和 calcCache
-				parts := strings.Split(cell, "!")
-				if len(parts) == 2 {
-					worksheetCache.Set(parts[0], parts[1], value)
-				}
+			// 所有批量计算的 INDEX-MATCH 结果都存入 worksheetCache
+			parts := strings.Split(cell, "!")
+			if len(parts) == 2 {
+				worksheetCache.Set(parts[0], parts[1], value)
+			}
 
+			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {
+				// 纯 INDEX-MATCH - 同时存入 calcCache
 				cacheKey := cell + "!raw=true"
 				f.calcCache.Store(cacheKey, value)
 				pureIndexMatchCount++
 
 				// DEBUG: 打印日销售表的批量 INDEX-MATCH 结果
 				if len(parts) == 2 && parts[0] == "日销售" && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-					log.Printf("💾 [INDEX-MATCH Store Pure] %s = '%s' (key: %s, worksheetCache updated)", cell, value, cacheKey)
+					log.Printf("💾 [INDEX-MATCH Store Pure] %s = '%s' (worksheetCache + calcCache)", cell, value)
 				}
 			} else {
-				// 复合公式 - 不存入 calcCache，只存入 SubExpressionCache
+				// 复合公式 - 不存入 calcCache，但已存入 worksheetCache
 				// DEBUG
-				parts := strings.Split(cell, "!")
-				if len(parts) == 2 && parts[0] == "日销售" && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-					log.Printf("💾 [INDEX-MATCH SubExpr Only] %s: expr='%s', value='%s' (复合公式,不存入calcCache)", cell, indexMatchExpr[:min(50, len(indexMatchExpr))], value)
+				if len(parts) == 2 && (parts[0] == "日销售" || parts[0] == "日销预测") && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
+					log.Printf("💾 [INDEX-MATCH Store Composite] %s = '%s' (worksheetCache only, 复合公式)", cell, value)
 				}
 			}
 		}
@@ -1503,8 +1504,8 @@ func (f *File) batchOptimizeLevel(levelIdx int, levelCells []string, graph *depe
 		levelCellsMap[cell] = true
 	}
 
-	pureSUMIFS := make(map[string]string)              // 纯 SUMIFS：整个公式就是 SUMIFS
-	uniqueSUMIFSExprs := make(map[string][]string)    // 唯一的 SUMIFS 表达式 -> 使用它的单元格列表
+	pureSUMIFS := make(map[string]string)          // 纯 SUMIFS：整个公式就是 SUMIFS
+	uniqueSUMIFSExprs := make(map[string][]string) // 唯一的 SUMIFS 表达式 -> 使用它的单元格列表
 
 	// 遍历当前层的所有公式
 	for cell := range levelCellsMap {
