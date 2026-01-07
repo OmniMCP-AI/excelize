@@ -5,15 +5,14 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // indexMatch1DPattern represents a batch INDEX-MATCH pattern with 1D lookup
 // Pattern: INDEX(array, MATCH(lookup, range, 0))
 type indexMatch1DPattern struct {
-	arrayRange  string // e.g., "日销预测!$B:$B"
-	matchRange  string // e.g., "日销预测!$A:$A"
-	formulas    map[string]*indexMatch1DFormula
+	arrayRange string // e.g., "日销预测!$B:$B"
+	matchRange string // e.g., "日销预测!$A:$A"
+	formulas   map[string]*indexMatch1DFormula
 }
 
 type indexMatch1DFormula struct {
@@ -26,9 +25,9 @@ type indexMatch1DFormula struct {
 // Pattern: AVERAGE(INDEX($C:$O, MATCH(lookup, range, 0), 0))
 // Returns the average of a row range (multiple columns)
 type averageIndexMatchPattern struct {
-	arrayRange  string // e.g., "日销售!$C:$O" (multi-column range)
-	matchRange  string // e.g., "日销售!$A:$A"
-	formulas    map[string]*averageIndexMatchFormula
+	arrayRange string // e.g., "日销售!$C:$O" (multi-column range)
+	matchRange string // e.g., "日销售!$A:$A"
+	formulas   map[string]*averageIndexMatchFormula
 }
 
 type averageIndexMatchFormula struct {
@@ -41,9 +40,9 @@ type averageIndexMatchFormula struct {
 // Pattern: INDEX(array, MATCH(lookup1, range1, 0), MATCH(lookup2, range2, 0))
 type indexMatch2DPattern struct {
 	// Common ranges (same for all formulas)
-	arrayRange     string // e.g., "日销预测!$G:$ZZ"
-	matchRange1    string // e.g., "日销预测!$A:$A"
-	matchRange2    string // e.g., "日销预测!$G$1:$ZZ$1"
+	arrayRange  string // e.g., "日销预测!$G:$ZZ"
+	matchRange1 string // e.g., "日销预测!$A:$A"
+	matchRange2 string // e.g., "日销预测!$G$1:$ZZ$1"
 
 	// Formula mapping: cell -> (lookup1Value, lookup2Value)
 	formulas map[string]*indexMatch2DFormula
@@ -51,11 +50,11 @@ type indexMatch2DPattern struct {
 
 // indexMatch2DFormula represents a single INDEX-MATCH formula in the batch
 type indexMatch2DFormula struct {
-	cell         string
-	sheet        string
-	lookup1Cell  string // e.g., "$A2"
-	lookup2Cell  string // e.g., "K$1"
-	lookup2Expr  string // e.g., "K$1-1" (expression to calculate)
+	cell        string
+	sheet       string
+	lookup1Cell string // e.g., "$A2"
+	lookup2Cell string // e.g., "K$1"
+	lookup2Expr string // e.g., "K$1-1" (expression to calculate)
 }
 
 // batchCalculateINDEXMATCH performs batch INDEX-MATCH calculation (both 1D and 2D)
@@ -117,9 +116,6 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 			}
 		}
 	}
-
-	log.Printf("    🔍 [INDEX-MATCH] Found %d AVERAGE+INDEX-MATCH, %d 1D patterns, and %d 2D patterns from %d formulas",
-		len(patternsAvg), len(patterns1D), len(patterns2D), len(formulas))
 
 	// Calculate AVERAGE+INDEX-MATCH patterns
 	for _, pattern := range patternsAvg {
@@ -257,7 +253,6 @@ func (f *File) extractINDEXMATCH2DPattern(sheet, cell, formula string) *indexMat
 
 // calculateINDEXMATCH2DPattern calculates a batch of INDEX-MATCH formulas
 func (f *File) calculateINDEXMATCH2DPattern(pattern *indexMatch2DPattern) map[string]string {
-	overallStart := time.Now()
 	results := make(map[string]string)
 
 	// Extract source sheet from array range
@@ -285,17 +280,13 @@ func (f *File) calculateINDEXMATCH2DPattern(pattern *indexMatch2DPattern) map[st
 	endCol := colParts[1]
 
 	// Read the array data (entire range)
-	readDataStart := time.Now()
 	rows, err := f.GetRows(sourceSheet)
 	if err != nil || len(rows) == 0 {
 		return results
 	}
-	readDataDuration := time.Since(readDataStart)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Read data from %s: %d rows in %v", sourceSheet, len(rows), readDataDuration)
 
 	// Build row lookup map (first MATCH dimension)
 	// Parse matchRange1: e.g., "日销预测!$A:$A"
-	buildMapStart := time.Now()
 	matchCol1 := extractColumnFromRange(pattern.matchRange1)
 	matchCol1Idx, _ := ColumnNameToNumber(matchCol1)
 	matchCol1Idx-- // Convert to 0-based
@@ -331,17 +322,9 @@ func (f *File) calculateINDEXMATCH2DPattern(pattern *indexMatch2DPattern) map[st
 			}
 		}
 	}
-	buildMapDuration := time.Since(buildMapStart)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Built lookup maps: row map %d entries, col map %d entries in %v",
-		len(rowLookupMap), len(colLookupMap), buildMapDuration)
-
-	// Calculate results for all formulas
-	startColIdx, _ := ColumnNameToNumber(startCol)
-	startColIdx--
 
 	// Pre-calculate all lookup values in batch to avoid repeated GetCellValue calls
 	// Build lookup value cache
-	cacheStart := time.Now()
 	lookupValueCache := make(map[string]string)
 
 	for _, info := range pattern.formulas {
@@ -367,12 +350,11 @@ func (f *File) calculateINDEXMATCH2DPattern(pattern *indexMatch2DPattern) map[st
 			lookupValueCache[cacheKey2], _ = f.GetCellValue(info.sheet, lookup2Cell)
 		}
 	}
-	cacheDuration := time.Since(cacheStart)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Built lookup value cache: %d unique values in %v",
-		len(lookupValueCache), cacheDuration)
 
 	// Calculate results for all formulas using cached lookup values
-	calcStart := time.Now()
+	startColIdx, _ := ColumnNameToNumber(startCol)
+	startColIdx--
+
 	for fullCell, info := range pattern.formulas {
 		// Get lookup1 value from cache
 		lookup1Cell := strings.ReplaceAll(info.lookup1Cell, "$", "")
@@ -434,13 +416,6 @@ func (f *File) calculateINDEXMATCH2DPattern(pattern *indexMatch2DPattern) map[st
 			results[fullCell] = "0"
 		}
 	}
-	calcDuration := time.Since(calcStart)
-	totalDuration := time.Since(overallStart)
-
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Calculated %d formulas in %v (lookup: %v)",
-		len(results), calcDuration, calcDuration)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Total time: %v (read: %v, map: %v, cache: %v, calc: %v)",
-		totalDuration, readDataDuration, buildMapDuration, cacheDuration, calcDuration)
 
 	return results
 }
@@ -863,7 +838,6 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 
 	var matchValues []string
 	if cached, ok := f.rangeCache.Load(matchRangeKey); ok {
-		log.Printf("    💾 [AVERAGE+INDEX-MATCH] Match column cache HIT: %s", matchRangeKey)
 		if matrix, ok := cached.(formulaArg); ok && matrix.Type == ArgMatrix {
 			matchValues = make([]string, len(matrix.Matrix))
 			for i, row := range matrix.Matrix {
@@ -873,7 +847,6 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 			}
 		}
 	} else {
-		log.Printf("    ⚠️  [AVERAGE+INDEX-MATCH] Match column cache MISS: %s, reading...", matchRangeKey)
 		// Fallback: read using GetRows
 		rows, err := f.GetRows(sourceSheet)
 		if err != nil || len(rows) == 0 {
@@ -895,7 +868,6 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 			Matrix: matchMatrix,
 		}
 		f.rangeCache.Store(matchRangeKey, cacheValue)
-		log.Printf("    ✅ [AVERAGE+INDEX-MATCH] Cached match column: %s (%d rows)", matchRangeKey, len(rows))
 	}
 
 	// Build lookup map: value -> row index (1-based)
@@ -906,19 +878,15 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 		}
 	}
 
-	log.Printf("    📊 [AVERAGE+INDEX-MATCH] Built lookup map: %d entries", len(lookupMap))
-
 	// Step 2: Preload the data range columns (use cache)
 	dataRangeKey := fmt.Sprintf("%s!R1C%d:R1048576C%d", sourceSheet, startColIdx, endColIdx)
 
 	var dataMatrix [][]formulaArg
 	if cached, ok := f.rangeCache.Load(dataRangeKey); ok {
-		log.Printf("    💾 [AVERAGE+INDEX-MATCH] Data range cache HIT: %s", dataRangeKey)
 		if matrix, ok := cached.(formulaArg); ok && matrix.Type == ArgMatrix {
 			dataMatrix = matrix.Matrix
 		}
 	} else {
-		log.Printf("    ⚠️  [AVERAGE+INDEX-MATCH] Data range cache MISS: %s, reading and caching...", dataRangeKey)
 		// Read and cache the data range
 		rows, err := f.GetRows(sourceSheet)
 		if err != nil || len(rows) == 0 {
@@ -1090,7 +1058,6 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, dat
 
 // calculateINDEXMATCH2DPatternWithCache calculates a batch of INDEX-MATCH formulas using cached data
 func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPattern, dataCache map[string][][]string) map[string]string {
-	overallStart := time.Now()
 	results := make(map[string]string)
 
 	// Extract source sheet from array range
@@ -1116,12 +1083,9 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 	endCol := colParts[1]
 
 	// Try to get data from cache first
-	readDataStart := time.Now()
 	var rows [][]string
-	var cacheHit bool
 	if cachedData, ok := dataCache[sourceSheet]; ok {
 		rows = cachedData
-		cacheHit = true
 	} else {
 		// Cache miss, read from file
 		var err error
@@ -1129,18 +1093,9 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 		if err != nil || len(rows) == 0 {
 			return results
 		}
-		cacheHit = false
-	}
-	readDataDuration := time.Since(readDataStart)
-	
-	if cacheHit {
-		log.Printf("        🔍 [INDEX-MATCH 2D Debug] Data cache HIT for %s: %d rows in %v", sourceSheet, len(rows), readDataDuration)
-	} else {
-		log.Printf("        🔍 [INDEX-MATCH 2D Debug] Data cache MISS for %s: read %d rows in %v", sourceSheet, len(rows), readDataDuration)
 	}
 
 	// Build lookup maps
-	buildMapStart := time.Now()
 	matchCol1 := extractColumnFromRange(pattern.matchRange1)
 	matchCol1Idx, _ := ColumnNameToNumber(matchCol1)
 	matchCol1Idx--
@@ -1172,15 +1127,11 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 			}
 		}
 	}
-	buildMapDuration := time.Since(buildMapStart)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Built lookup maps: row map %d entries, col map %d entries in %v",
-		len(rowLookupMap), len(colLookupMap), buildMapDuration)
 
 	startColIdx, _ := ColumnNameToNumber(startCol)
 	startColIdx--
 
 	// Pre-calculate all lookup values
-	cacheStart := time.Now()
 	lookupValueCache := make(map[string]string)
 
 	for _, info := range pattern.formulas {
@@ -1203,12 +1154,8 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 			lookupValueCache[cacheKey2], _ = f.GetCellValue(info.sheet, lookup2Cell)
 		}
 	}
-	cacheDuration := time.Since(cacheStart)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Built lookup value cache: %d unique values in %v",
-		len(lookupValueCache), cacheDuration)
 
 	// Calculate results
-	calcStart := time.Now()
 	for fullCell, info := range pattern.formulas {
 		lookup1Cell := strings.ReplaceAll(info.lookup1Cell, "$", "")
 		cacheKey1 := info.sheet + "!" + lookup1Cell
@@ -1263,13 +1210,6 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 			results[fullCell] = "0"
 		}
 	}
-	calcDuration := time.Since(calcStart)
-	totalDuration := time.Since(overallStart)
-
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Calculated %d formulas in %v (lookup: %v)",
-		len(results), calcDuration, calcDuration)
-	log.Printf("        🔍 [INDEX-MATCH 2D Debug] Total time: %v (read: %v, map: %v, cache: %v, calc: %v)",
-		totalDuration, readDataDuration, buildMapDuration, cacheDuration, calcDuration)
 
 	return results
 }

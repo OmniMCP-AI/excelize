@@ -2,10 +2,8 @@ package excelize
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/xuri/efp"
 )
@@ -67,8 +65,6 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 	replacements := 0
 	missedCount := 0
 
-	debugCell := (sheet == "补货计划" && (cell == "K2" || cell == "L2" || cell == "M2" || cell == "J2"))
-
 	// Extract and replace ALL INDEX-MATCH expressions (do this first as they may be nested in IFERROR)
 	remainingFormula := modifiedFormula
 	for {
@@ -81,14 +77,8 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 			// Replace INDEX-MATCH expression with its cached numeric value
 			modifiedFormula = strings.Replace(modifiedFormula, indexMatchExpr, cachedValue, 1)
 			replacements++
-			if debugCell {
-				log.Printf("    🔍 [%s!%s] INDEX-MATCH缓存命中: %s -> %s", sheet, cell, indexMatchExpr[:minInt(80, len(indexMatchExpr))], cachedValue)
-			}
 		} else {
 			missedCount++
-			if debugCell {
-				log.Printf("    ⚠️ [%s!%s] INDEX-MATCH缓存未命中: %s", sheet, cell, indexMatchExpr[:minInt(80, len(indexMatchExpr))])
-			}
 		}
 
 		// Remove the processed INDEX-MATCH to find the next one
@@ -112,14 +102,8 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 			// Replace SUMIFS expression with its cached numeric value
 			modifiedFormula = strings.Replace(modifiedFormula, sumifsExpr, cachedValue, 1)
 			replacements++
-			if debugCell {
-				log.Printf("    🔍 [%s!%s] SUMIFS缓存命中: %s -> %s", sheet, cell, sumifsExpr[:minInt(80, len(sumifsExpr))], cachedValue)
-			}
 		} else {
 			missedCount++
-			if debugCell {
-				log.Printf("    ⚠️ [%s!%s] SUMIFS缓存未命中: %s", sheet, cell, sumifsExpr[:minInt(80, len(sumifsExpr))])
-			}
 		}
 
 		// Remove the processed SUMIFS to find the next one
@@ -155,28 +139,8 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 		}
 	}
 
-	if debugCell {
-		log.Printf("    📝 [%s!%s] 原始公式: %s", sheet, cell, formula[:minInt(150, len(formula))])
-		log.Printf("    📝 [%s!%s] 替换后公式: %s", sheet, cell, modifiedFormula[:minInt(150, len(modifiedFormula))])
-		log.Printf("    📊 [%s!%s] 替换统计: %d个成功, %d个失败", sheet, cell, replacements, missedCount)
-	}
-
 	// If we replaced sub-expressions, evaluate the simplified formula
 	if replacements > 0 {
-		if debugCell {
-			start := time.Now()
-
-			// 测试读取$E2的性能
-			e2Start := time.Now()
-			e2Value, _ := f.GetCellValue(sheet, "E2")
-			e2Duration := time.Since(e2Start)
-			log.Printf("    ⏱️  [%s!%s] GetCellValue(E2)耗时: %v, 值: %s", sheet, cell, e2Duration, e2Value)
-
-			result, err := f.evalFormulaString(sheet, cell, modifiedFormula, opts)
-			duration := time.Since(start)
-			log.Printf("    ⏱️  [%s!%s] evalFormulaString耗时: %v, 结果: %s", sheet, cell, duration, result)
-			return result, err
-		}
 		return f.evalFormulaString(sheet, cell, modifiedFormula, opts)
 	}
 
@@ -185,26 +149,10 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 	// This will be slower but ensures correctness
 	if missedCount > 0 {
 		// Cache miss - will be slow
-		if debugCell {
-			log.Printf("    ⚠️ [%s!%s] 缓存未命中，使用 CalcCellValue", sheet, cell)
-			start := time.Now()
-			result, err := f.CalcCellValue(sheet, cell, opts)
-			duration := time.Since(start)
-			log.Printf("    ⏱️  [%s!%s] CalcCellValue耗时: %v, 结果: %s", sheet, cell, duration, result)
-			return result, err
-		}
 		return f.CalcCellValue(sheet, cell, opts)
 	}
 
 	// No SUMIFS/AVERAGEIFS/INDEX-MATCH in this formula, use normal calculation
-	if debugCell {
-		log.Printf("    📝 [%s!%s] 无缓存项，原始公式: %s", sheet, cell, formula[:minInt(150, len(formula))])
-		start := time.Now()
-		result, err := f.CalcCellValue(sheet, cell, opts)
-		duration := time.Since(start)
-		log.Printf("    ⏱️  [%s!%s] CalcCellValue总耗时: %v, 结果: %s", sheet, cell, duration, result)
-		return result, err
-	}
 	return f.CalcCellValue(sheet, cell, opts)
 }
 
@@ -254,4 +202,3 @@ func (f *File) evalFormulaString(sheet, cell, formula string, opts Options) (str
 
 	return resultStr, nil
 }
-

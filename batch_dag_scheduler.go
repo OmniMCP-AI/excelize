@@ -33,8 +33,8 @@ type DAGScheduler struct {
 	subExprCache    *SubExpressionCache // 子表达式缓存（用于复合公式）
 
 	// Slow formula tracking
-	slowFormulas   []slowFormulaInfo
-	slowFormulaMu  sync.Mutex
+	slowFormulas  []slowFormulaInfo
+	slowFormulaMu sync.Mutex
 }
 
 // NewDAGScheduler creates a new DAG scheduler
@@ -220,25 +220,10 @@ func (scheduler *DAGScheduler) worker(wg *sync.WaitGroup, workerID int) {
 		default:
 			// Queue empty, check if we're done
 			completed := scheduler.completedCount.Load()
-			inFlight := scheduler.inFlightCount.Load()
 
-			// Exit if all formulas are completed OR if we've reached total and nothing is in flight
+			// Exit if all formulas are completed
 			if completed >= int64(scheduler.totalFormulas) {
 				return
-			}
-
-			// If nothing is in flight and nothing in queue, we might be stuck or done
-			if inFlight == 0 && len(scheduler.readyQueue) == 0 {
-				// Double-check completion
-				if completed >= int64(scheduler.totalFormulas) {
-					return
-				}
-				// If we're not done but nothing is running, something is wrong
-				// This shouldn't happen in a correct DAG, but let's be safe
-				if completed > 0 && completed < int64(scheduler.totalFormulas) {
-					log.Printf("⚠️ [DAG Scheduler] Worker %d: Potential deadlock detected. Completed: %d/%d, InFlight: %d",
-						workerID, completed, scheduler.totalFormulas, inFlight)
-				}
 			}
 
 			// 不要 sleep，让 select 立即重试，提高响应速度
