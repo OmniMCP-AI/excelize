@@ -258,8 +258,22 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	opts := Options{RawCellValue: true, MaxCalcIterations: 100}
 	calcStart := time.Now()
 
+	// DEBUG: 打印日销售表的计算
+	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
+		formulaPreview := formula
+		if len(formulaPreview) > 80 {
+			formulaPreview = formulaPreview[:80] + "..."
+		}
+		log.Printf("🧮 [CalcStart] %s!%s, formula: %s", sheet, cellName, formulaPreview)
+	}
+
 	value, err := scheduler.f.CalcCellValueWithSubExprCache(sheet, cellName, formula, scheduler.subExprCache, opts)
 	calcDuration := time.Since(calcStart)
+
+	// DEBUG: 打印日销售表的计算结果
+	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
+		log.Printf("🧮 [CalcResult] %s!%s = '%s' (err: %v)", sheet, cellName, value, err)
+	}
 
 	// 记录慢速公式（超过5ms）
 	if calcDuration > 5*time.Millisecond {
@@ -327,6 +341,11 @@ func (scheduler *DAGScheduler) writeBackToWorksheet(sheet, cellName, value strin
 	// 同时也缓存带raw=true后缀的key，供其他地方使用
 	cacheKeyRaw := cacheKey + "!raw=true"
 	scheduler.f.calcCache.Store(cacheKeyRaw, value)
+
+	// DEBUG: 打印日销售表的写入
+	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
+		log.Printf("🔧 [WriteBack] %s!%s = '%s'", sheet, cellName, value)
+	}
 
 	// 2. 写回worksheet的<v>标签，保留公式<f>标签
 	// 这样SaveAs时才能保存正确的计算值

@@ -2,6 +2,7 @@ package excelize
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -60,10 +61,25 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 		return f.GetCellValue(sheet, cell, opts)
 	}
 
+	// DEBUG
+	debugCell := sheet == "日销售" && (cell == "C2" || cell == "C3" || cell == "D2" || cell == "D3" || cell == "E2")
+
 	// 首先检查 calcCache，看是否已经有完整的计算结果（比如批量计算的结果）
 	cacheKey := fmt.Sprintf("%s!%s!raw=%t", sheet, cell, opts.RawCellValue)
 	if cachedResult, found := f.calcCache.Load(cacheKey); found {
+		if debugCell {
+			log.Printf("🔍 [SubExpr] %s!%s calcCache 命中: '%v'", sheet, cell, cachedResult)
+		}
 		return cachedResult.(string), nil
+	}
+
+	// DEBUG: 打印日销售 C2 的子表达式替换
+	if debugCell {
+		formulaPrev := formula
+		if len(formulaPrev) > 100 {
+			formulaPrev = formulaPrev[:100] + "..."
+		}
+		log.Printf("🔍 [SubExpr] %s!%s 开始处理，原始公式: %s", sheet, cell, formulaPrev)
 	}
 
 	// Try to replace ALL SUMIFS/AVERAGEIFS/INDEX-MATCH in the formula with cached values
@@ -80,10 +96,36 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 		}
 
 		if cachedValue, ok := subExprCache.Load(indexMatchExpr); ok {
-			// Replace INDEX-MATCH expression with its cached numeric value
-			modifiedFormula = strings.Replace(modifiedFormula, indexMatchExpr, cachedValue, 1)
+			// Replace INDEX-MATCH expression with its cached value
+			// IMPORTANT: Preserve string type by adding quotes
+			// Excel formulas treat "0" (string) differently from 0 (number)
+			// in comparisons like IFERROR("0",0)=0 which returns FALSE
+			if debugCell {
+				exprPrev := indexMatchExpr
+				if len(exprPrev) > 50 {
+					exprPrev = exprPrev[:50] + "..."
+				}
+				log.Printf("🔍 [SubExpr] %s!%s INDEX-MATCH 缓存命中: %s -> '%s'", sheet, cell, exprPrev, cachedValue)
+			}
+
+			// Always quote the value to preserve string type from cell data
+			// This ensures Excel's type coercion works correctly
+			replacementValue := `"` + strings.ReplaceAll(cachedValue, `"`, `""`) + `"`
+
+			if debugCell {
+				log.Printf("🔍 [SubExpr] %s!%s 替换值: %s (quoted to preserve type)", sheet, cell, replacementValue)
+			}
+
+			modifiedFormula = strings.Replace(modifiedFormula, indexMatchExpr, replacementValue, 1)
 			replacements++
 		} else {
+			if debugCell {
+				exprPrev := indexMatchExpr
+				if len(exprPrev) > 50 {
+					exprPrev = exprPrev[:50] + "..."
+				}
+				log.Printf("🔍 [SubExpr] %s!%s INDEX-MATCH 缓存未命中: %s", sheet, cell, exprPrev)
+			}
 			missedCount++
 		}
 
@@ -106,7 +148,9 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 
 		if cachedValue, ok := subExprCache.Load(sumifsExpr); ok {
 			// Replace SUMIFS expression with its cached numeric value
-			modifiedFormula = strings.Replace(modifiedFormula, sumifsExpr, cachedValue, 1)
+			// Always quote to preserve string type
+			replacementValue := `"` + strings.ReplaceAll(cachedValue, `"`, `""`) + `"`
+			modifiedFormula = strings.Replace(modifiedFormula, sumifsExpr, replacementValue, 1)
 			replacements++
 		} else {
 			missedCount++
@@ -147,15 +191,33 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 
 	// If we replaced sub-expressions, evaluate the simplified formula
 	if replacements > 0 {
-		return f.evalFormulaString(sheet, cell, modifiedFormula, opts)
+		if debugCell {
+			modPrev := modifiedFormula
+			if len(modPrev) > 100 {
+				modPrev = modPrev[:100] + "..."
+			}
+			log.Printf("🔍 [SubExpr] %s!%s 替换后公式: %s (replacements=%d)", sheet, cell, modPrev, replacements)
+		}
+		result, err := f.evalFormulaString(sheet, cell, modifiedFormula, opts)
+		if debugCell {
+			log.Printf("🔍 [SubExpr] %s!%s 计算结果: '%s' (err: %v)", sheet, cell, result, err)
+		}
+		return result, err
 	}
 
 	// No cached sub-expressions found
 	// If there were SUMIFS/AVERAGEIFS/INDEX-MATCH but we didn't cache them, we need to calculate normally
 	// This will be slower but ensures correctness
 	if missedCount > 0 {
+		if debugCell {
+			log.Printf("🔍 [SubExpr] %s!%s Cache MISS: missedCount=%d, 使用 CalcCellValue", sheet, cell, missedCount)
+		}
 		// Cache miss - will be slow
 		return f.CalcCellValue(sheet, cell, opts)
+	}
+
+	if debugCell {
+		log.Printf("🔍 [SubExpr] %s!%s 没有子表达式需要替换，使用 CalcCellValue", sheet, cell)
 	}
 
 	// No SUMIFS/AVERAGEIFS/INDEX-MATCH in this formula, use normal calculation

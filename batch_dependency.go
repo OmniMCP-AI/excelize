@@ -34,8 +34,14 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 		nodes: make(map[string]*formulaNode),
 	}
 
-	// Step 1: Collect all formulas and extract their dependencies
+	// Step 1: First pass - collect all formulas WITHOUT extracting dependencies
 	sheetList := f.GetSheetList()
+	formulasToProcess := make([]struct {
+		fullCell string
+		sheet    string
+		cellRef  string
+		formula  string
+	}, 0)
 
 	for _, sheet := range sheetList {
 		ws, err := f.workSheetReader(sheet)
@@ -54,13 +60,19 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 
 					if formula != "" {
 						fullCell := sheet + "!" + cell.R
-						deps := extractDependencies(formula, sheet, cell.R)
+						formulasToProcess = append(formulasToProcess, struct {
+							fullCell string
+							sheet    string
+							cellRef  string
+							formula  string
+						}{fullCell, sheet, cell.R, formula})
 
+						// Create node without dependencies yet
 						graph.nodes[fullCell] = &formulaNode{
 							cell:         fullCell,
 							formula:      formula,
-							dependencies: deps,
-							level:        -1, // Not assigned yet
+							dependencies: nil,
+							level:        -1,
 						}
 					}
 				}
@@ -69,6 +81,41 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	}
 
 	log.Printf("  📊 [Dependency Analysis] Collected %d formulas", len(graph.nodes))
+
+	// Step 1.5: Build column index for efficient column range expansion
+	columnIndex := make(map[string][]string)
+	for cellRef := range graph.nodes {
+		parts := strings.Split(cellRef, "!")
+		if len(parts) == 2 {
+			sheetName := parts[0]
+			cell := parts[1]
+
+			// Extract column letter
+			cellCol := ""
+			for _, ch := range cell {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					cellCol += string(ch)
+				} else {
+					break
+				}
+			}
+
+			if cellCol != "" {
+				key := sheetName + "!" + cellCol
+				columnIndex[key] = append(columnIndex[key], cellRef)
+			}
+		}
+	}
+
+	log.Printf("  📊 [Dependency Analysis] Built column index: %d columns", len(columnIndex))
+
+	// Step 2: Second pass - extract dependencies with column range expansion
+	for _, info := range formulasToProcess {
+		deps := extractDependenciesWithColumnIndex(info.formula, info.sheet, info.cellRef, columnIndex)
+		graph.nodes[info.fullCell].dependencies = deps
+	}
+
+	log.Printf("  📊 [Dependency Analysis] Extracted dependencies")
 
 	// Step 2: Assign levels using topological sort
 	graph.assignLevels()
@@ -288,16 +335,39 @@ func extractDependencies(formula, currentSheet, currentCell string) []string {
 					sheetName := strings.Trim(parts[0], "'")
 					cellPart := parts[1]
 
-					// Handle ranges (A1:B2)
+					// Handle ranges (A1:B2 or $B:$B)
 					if strings.Contains(cellPart, ":") {
+						// Check if it's a column range (e.g., $B:$B or A:A)
 						rangeParts := strings.Split(cellPart, ":")
-						for _, cell := range rangeParts {
-							cleanCell := strings.ReplaceAll(cell, "$", "")
-							deps[sheetName+"!"+cleanCell] = true
+						if len(rangeParts) == 2 {
+							start := strings.ReplaceAll(rangeParts[0], "$", "")
+							end := strings.ReplaceAll(rangeParts[1], "$", "")
+
+							// Check if both parts are just column letters (no row numbers)
+							// This indicates a full column range like A:A or B:B
+							isColumnRange := !strings.ContainsAny(start, "0123456789") &&
+											 !strings.ContainsAny(end, "0123456789")
+
+							if isColumnRange {
+								// Column range reference: mark as depends on the entire column
+								// Use a special marker: Sheet!COL:COL_RANGE
+								// This tells the system that this formula depends on formulas in that column
+								deps[sheetName+"!"+start+":COLUMN_RANGE"] = true
+							} else {
+								// Regular range like A1:B2
+								for _, cell := range rangeParts {
+									cleanCell := strings.ReplaceAll(cell, "$", "")
+									if cleanCell != "" {
+										deps[sheetName+"!"+cleanCell] = true
+									}
+								}
+							}
 						}
 					} else {
 						cleanCell := strings.ReplaceAll(cellPart, "$", "")
-						deps[sheetName+"!"+cleanCell] = true
+						if cleanCell != "" {
+							deps[sheetName+"!"+cleanCell] = true
+						}
 					}
 				}
 			} else {
@@ -307,11 +377,152 @@ func extractDependencies(formula, currentSheet, currentCell string) []string {
 					rangeParts := strings.Split(ref, ":")
 					for _, cell := range rangeParts {
 						cleanCell := strings.ReplaceAll(cell, "$", "")
-						deps[currentSheet+"!"+cleanCell] = true
+						if cleanCell != "" {
+							deps[currentSheet+"!"+cleanCell] = true
+						}
 					}
 				} else {
 					cleanCell := strings.ReplaceAll(ref, "$", "")
-					deps[currentSheet+"!"+cleanCell] = true
+					if cleanCell != "" {
+						deps[currentSheet+"!"+cleanCell] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
+
+	return result
+}
+
+// extractDependenciesWithColumnIndex extracts all cell references from a formula
+// When encountering column range references (like $B:$B), it expands them to actual formula cells using the column index
+func extractDependenciesWithColumnIndex(formula, currentSheet, currentCell string, columnIndex map[string][]string) []string {
+	deps := make(map[string]bool)
+
+	// Use the same parser that CalcCellValue uses
+	ps := efp.ExcelParser()
+	tokens := ps.Parse(formula)
+	if tokens == nil {
+		return []string{}
+	}
+
+	// Iterate through tokens to find cell references
+	for _, token := range tokens {
+		if token.TType != efp.TokenTypeOperand {
+			continue
+		}
+
+		// Token subtypes that represent cell references
+		if token.TSubType == efp.TokenSubTypeRange {
+			// This is a cell reference or range
+			ref := token.TValue
+
+			// Check if it's a cross-sheet reference (contains !)
+			if strings.Contains(ref, "!") {
+				// Cross-sheet reference
+				parts := strings.SplitN(ref, "!", 2)
+				if len(parts) == 2 {
+					sheetName := strings.Trim(parts[0], "'")
+					cellPart := parts[1]
+
+					// Handle ranges (A1:B2 or $B:$B)
+					if strings.Contains(cellPart, ":") {
+						// Check if it's a column range (e.g., $B:$B or A:A)
+						rangeParts := strings.Split(cellPart, ":")
+						if len(rangeParts) == 2 {
+							start := strings.ReplaceAll(rangeParts[0], "$", "")
+							end := strings.ReplaceAll(rangeParts[1], "$", "")
+
+							// Check if both parts are just column letters (no row numbers)
+							// This indicates a full column range like A:A or B:B
+							isColumnRange := !strings.ContainsAny(start, "0123456789") &&
+											 !strings.ContainsAny(end, "0123456789")
+
+							if isColumnRange {
+								// Column range reference: expand to all formulas in that column
+								key := sheetName + "!" + start
+								if formulas, exists := columnIndex[key]; exists {
+									for _, formulaCell := range formulas {
+										deps[formulaCell] = true
+									}
+								}
+								// Also check if it's a multi-column range like A:C
+								if start != end {
+									// For now, just add the end column too
+									endKey := sheetName + "!" + end
+									if formulas, exists := columnIndex[endKey]; exists {
+										for _, formulaCell := range formulas {
+											deps[formulaCell] = true
+										}
+									}
+								}
+							} else {
+								// Regular range like A1:B2
+								for _, cell := range rangeParts {
+									cleanCell := strings.ReplaceAll(cell, "$", "")
+									if cleanCell != "" {
+										deps[sheetName+"!"+cleanCell] = true
+									}
+								}
+							}
+						}
+					} else {
+						cleanCell := strings.ReplaceAll(cellPart, "$", "")
+						if cleanCell != "" {
+							deps[sheetName+"!"+cleanCell] = true
+						}
+					}
+				}
+			} else {
+				// Same-sheet reference
+				// Handle ranges (A1:B2)
+				if strings.Contains(ref, ":") {
+					rangeParts := strings.Split(ref, ":")
+					if len(rangeParts) == 2 {
+						start := strings.ReplaceAll(rangeParts[0], "$", "")
+						end := strings.ReplaceAll(rangeParts[1], "$", "")
+
+						// Check if it's a column range
+						isColumnRange := !strings.ContainsAny(start, "0123456789") &&
+										 !strings.ContainsAny(end, "0123456789")
+
+						if isColumnRange {
+							// Expand column range on same sheet
+							key := currentSheet + "!" + start
+							if formulas, exists := columnIndex[key]; exists {
+								for _, formulaCell := range formulas {
+									deps[formulaCell] = true
+								}
+							}
+							if start != end {
+								endKey := currentSheet + "!" + end
+								if formulas, exists := columnIndex[endKey]; exists {
+									for _, formulaCell := range formulas {
+										deps[formulaCell] = true
+									}
+								}
+							}
+						} else {
+							// Regular range
+							for _, cell := range rangeParts {
+								cleanCell := strings.ReplaceAll(cell, "$", "")
+								if cleanCell != "" {
+									deps[currentSheet+"!"+cleanCell] = true
+								}
+							}
+						}
+					}
+				} else {
+					cleanCell := strings.ReplaceAll(ref, "$", "")
+					if cleanCell != "" {
+						deps[currentSheet+"!"+cleanCell] = true
+					}
 				}
 			}
 		}
@@ -843,11 +1054,14 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 	// 关键优化：创建全局数据源缓存
 	// 所有层级的批量SUMIFS计算共享同一份数据源，避免重复读取
 	// ========================================
-	log.Printf("⚡ [Data Cache] Pre-loading data sources...")
+	// 步骤3：初始化统一的 WorksheetCache
+	// ========================================
+	log.Printf("⚡ [Worksheet Cache] Pre-loading all sheets...")
 	cacheStart := time.Now()
-	dataSourceCache := f.buildDataSourceCache(graph)
+	worksheetCache := f.buildWorksheetCache(graph)
 	cacheDuration := time.Since(cacheStart)
-	log.Printf("✅ [Data Cache] Loaded %d sheets in %v", len(dataSourceCache), cacheDuration)
+	log.Printf("✅ [Worksheet Cache] Loaded %d cells from %d sheets in %v",
+		worksheetCache.Len(), len(f.GetSheetList()), cacheDuration)
 
 	// 全局进度跟踪
 	totalCompleted := int64(0)
@@ -891,7 +1105,7 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		// 步骤2：为当前层批量优化 SUMIFS（使用共享数据缓存）
 		// ========================================
 		batchOptStart := time.Now()
-		subExprCache := f.batchOptimizeLevelWithCache(levelIdx, levelCells, graph, dataSourceCache)
+		subExprCache := f.batchOptimizeLevelWithCache(levelIdx, levelCells, graph, worksheetCache)
 		batchOptDuration := time.Since(batchOptStart)
 
 		// ========================================
@@ -915,14 +1129,21 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 	log.Printf("\n✅ [DAG Calculation] Completed all %d formulas", totalFormulas)
 }
 
-// buildDataSourceCache pre-loads all data sources used by SUMIFS formulas
-func (f *File) buildDataSourceCache(graph *dependencyGraph) map[string][][]string {
-	cache := make(map[string][][]string)
+// buildWorksheetCache pre-loads all worksheets into a unified cache
+// This replaces dataSourceCache and provides a single source of truth for all cell values
+func (f *File) buildWorksheetCache(graph *dependencyGraph) *WorksheetCache {
+	worksheetCache := NewWorksheetCache()
 	sheetsToLoad := make(map[string]bool)
 
 	// 收集所有需要读取的数据源sheet
 	for _, node := range graph.nodes {
 		formula := node.formula
+
+		// 添加公式所在的 sheet
+		parts := strings.Split(node.cell, "!")
+		if len(parts) >= 2 {
+			sheetsToLoad[parts[0]] = true
+		}
 
 		// 检查是否包含 SUMIFS
 		var sumifsExpr string
@@ -972,16 +1193,15 @@ func (f *File) buildDataSourceCache(graph *dependencyGraph) map[string][][]strin
 		}
 	}
 
-	// 一次性读取所有数据源sheet（使用原始值以避免日期格式问题）
+	// 加载所有涉及的 sheets 到统一缓存
 	for sheetName := range sheetsToLoad {
-		rows, err := f.getRowsRaw(sheetName)
-		if err == nil && len(rows) > 0 {
-			cache[sheetName] = rows
-			log.Printf("  📦 Cached sheet '%s': %d rows", sheetName, len(rows))
+		err := worksheetCache.LoadSheet(f, sheetName)
+		if err == nil {
+			log.Printf("  📦 Cached sheet '%s': %d cells", sheetName, worksheetCache.SheetLen(sheetName))
 		}
 	}
 
-	return cache
+	return worksheetCache
 }
 
 // getRowsRaw reads all rows from a sheet with raw cell values (unformatted)
@@ -1039,8 +1259,8 @@ func (f *File) getRowsRaw(sheet string) ([][]string, error) {
 	return rows, nil
 }
 
-// batchOptimizeLevelWithCache performs batch SUMIFS and INDEX-MATCH optimization for a specific level using cached data
-func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, graph *dependencyGraph, dataCache map[string][][]string) *SubExpressionCache {
+// batchOptimizeLevelWithCache performs batch SUMIFS and INDEX-MATCH optimization for a specific level using worksheetCache
+func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, graph *dependencyGraph, worksheetCache *WorksheetCache) *SubExpressionCache {
 	subExprCache := NewSubExpressionCache()
 
 	// 收集当前层的所有公式
@@ -1107,13 +1327,20 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 
 	batchStart := time.Now()
 
-	// 批量计算纯 SUMIFS（使用缓存数据）
+	// 批量计算纯 SUMIFS（使用 worksheetCache）
 	if len(pureSUMIFS) >= 10 {
-		batchResults := f.batchCalculateSUMIFSWithCache(pureSUMIFS, dataCache)
+		batchResults := f.batchCalculateSUMIFSWithCache(pureSUMIFS, worksheetCache)
 		log.Printf("  ⚡ [Level %d Batch] Calculated %d pure SUMIFS", levelIdx, len(batchResults))
 
-		// 将批量结果存入 calcCache
+		// 将批量结果存入 worksheetCache 和 calcCache
 		for cell, value := range batchResults {
+			// Store in worksheetCache for subsequent reads
+			parts := strings.Split(cell, "!")
+			if len(parts) == 2 {
+				worksheetCache.Set(parts[0], parts[1], value)
+			}
+
+			// Store in calcCache for compatibility
 			cacheKey := cell + "!raw=true"
 			f.calcCache.Store(cacheKey, value)
 		}
@@ -1137,9 +1364,9 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			}
 		}
 
-		// 批量计算这些子表达式（使用缓存数据）
+		// 批量计算这些子表达式（使用 worksheetCache）
 		if len(tempFormulas) >= 10 {
-			batchResults := f.batchCalculateSUMIFSWithCache(tempFormulas, dataCache)
+			batchResults := f.batchCalculateSUMIFSWithCache(tempFormulas, worksheetCache)
 			log.Printf("  ⚡ [Level %d Batch] Calculated %d SUMIFS sub-expressions", levelIdx, len(batchResults))
 
 			// 将子表达式结果存入 SubExpressionCache
@@ -1154,21 +1381,69 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		}
 	}
 
-	// 批量计算 INDEX-MATCH 公式（使用缓存数据）
+	// 批量计算 INDEX-MATCH 公式（使用 worksheetCache）
 	if len(indexMatchFormulas) >= 10 {
 		indexMatchStart := time.Now()
-		batchResults := f.batchCalculateINDEXMATCHWithCache(indexMatchFormulas, dataCache)
+		batchResults := f.batchCalculateINDEXMATCHWithCache(indexMatchFormulas, worksheetCache)
 		indexMatchCalcDuration := time.Since(indexMatchStart)
 		log.Printf("  ⚡ [Level %d Batch] Calculated %d INDEX-MATCH formulas in %v",
 			levelIdx, len(batchResults), indexMatchCalcDuration)
 
-		// 将 INDEX-MATCH 结果存入 calcCache
+		// 将 INDEX-MATCH 结果存入 worksheetCache 和 calcCache（仅针对纯 INDEX-MATCH 公式）
+		// 对于复合公式（如 IF(INDEX-MATCH=0, ...)），只存入 SubExpressionCache
 		cacheStoreStart := time.Now()
+		pureIndexMatchCount := 0
 		for cell, value := range batchResults {
-			cacheKey := cell + "!raw=true"
-			f.calcCache.Store(cacheKey, value)
+			node, exists := graph.nodes[cell]
+			if !exists {
+				continue
+			}
+
+			// 提取 INDEX-MATCH 表达式
+			indexMatchExpr := extractINDEXMATCHFromFormula(node.formula)
+			if indexMatchExpr == "" {
+				continue
+			}
+
+			// 检查是否是纯 INDEX-MATCH（整个公式就是 INDEX-MATCH）
+			cleanFormula := strings.TrimSpace(strings.TrimPrefix(node.formula, "="))
+			// 移除可能的 IFERROR 包装
+			if strings.HasPrefix(cleanFormula, "IFERROR(") {
+				// 提取 IFERROR 的第一个参数
+				inner := strings.TrimPrefix(cleanFormula, "IFERROR(")
+				if commaIdx := strings.LastIndex(inner, ","); commaIdx > 0 {
+					cleanFormula = strings.TrimSpace(inner[:commaIdx])
+				}
+			}
+			cleanExpr := strings.TrimSpace(indexMatchExpr)
+
+			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {
+				// 纯 INDEX-MATCH - 存入 worksheetCache 和 calcCache
+				parts := strings.Split(cell, "!")
+				if len(parts) == 2 {
+					worksheetCache.Set(parts[0], parts[1], value)
+				}
+
+				cacheKey := cell + "!raw=true"
+				f.calcCache.Store(cacheKey, value)
+				pureIndexMatchCount++
+
+				// DEBUG: 打印日销售表的批量 INDEX-MATCH 结果
+				if len(parts) == 2 && parts[0] == "日销售" && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
+					log.Printf("💾 [INDEX-MATCH Store Pure] %s = '%s' (key: %s, worksheetCache updated)", cell, value, cacheKey)
+				}
+			} else {
+				// 复合公式 - 不存入 calcCache，只存入 SubExpressionCache
+				// DEBUG
+				parts := strings.Split(cell, "!")
+				if len(parts) == 2 && parts[0] == "日销售" && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
+					log.Printf("💾 [INDEX-MATCH SubExpr Only] %s: expr='%s', value='%s' (复合公式,不存入calcCache)", cell, indexMatchExpr[:min(50, len(indexMatchExpr))], value)
+				}
+			}
 		}
 		cacheStoreDuration := time.Since(cacheStoreStart)
+		log.Printf("  📊 [Level %d Batch] Stored %d pure INDEX-MATCH in calcCache (skipped %d composite)",
+			levelIdx, pureIndexMatchCount, len(batchResults)-pureIndexMatchCount)
 
 		// 构建反向映射：expr -> cell（避免双重循环）
 		exprToCellStart := time.Now()
@@ -1186,6 +1461,15 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		for expr, cell := range exprToCell {
 			if value, ok := batchResults[cell]; ok {
 				subExprCache.Store(expr, value)
+
+				// DEBUG: 日销售 C3/D3
+				if strings.Contains(cell, "日销售!C3") || strings.Contains(cell, "日销售!D3") {
+					exprPreview := expr
+					if len(exprPreview) > 60 {
+						exprPreview = exprPreview[:60] + "..."
+					}
+					log.Printf("  🔍 [SubExpr Store] %s: expr='%s', value='%s'", cell, exprPreview, value)
+				}
 			}
 		}
 		exprToCellDuration := time.Since(exprToCellStart)

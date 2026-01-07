@@ -8,22 +8,15 @@ import (
 	"sync"
 )
 
-// getCellValueOrCalcCache retrieves cell value, preferring calcCache over worksheet value
-// This is important for formulas that depend on other calculated cells
-func (f *File) getCellValueOrCalcCache(sheet, cell string) string {
-	// 先尝试从 calcCache 读取（优先使用 raw=true 的缓存，因为批量计算用的是这个）
-	cacheKey := fmt.Sprintf("%s!%s!raw=true", sheet, cell)
-	if cachedValue, ok := f.calcCache.Load(cacheKey); ok {
-		return cachedValue.(string)
+// getCellValueOrCalcCache retrieves cell value from the unified worksheetCache
+// This ensures all reads get the latest values (both original and calculated)
+func (f *File) getCellValueOrCalcCache(sheet, cell string, worksheetCache *WorksheetCache) string {
+	// Read from unified worksheetCache
+	if value, ok := worksheetCache.Get(sheet, cell); ok {
+		return value
 	}
 
-	// 如果 calcCache 没有，再尝试不带 raw 的缓存键
-	cacheKey = fmt.Sprintf("%s!%s!raw=false", sheet, cell)
-	if cachedValue, ok := f.calcCache.Load(cacheKey); ok {
-		return cachedValue.(string)
-	}
-
-	// 最后从工作表读取（使用原始值以匹配数据源缓存中的原始值）
+	// If not in cache, read from worksheet (fallback for cells not pre-loaded)
 	value, _ := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
 	return value
 }
@@ -262,9 +255,9 @@ func ExtractSUMIFSFromFormulaExport(formula string) string {
 	return extractSUMIFSFromFormula(formula)
 }
 
-// batchCalculateSUMIFSWithCache performs batch SUMIFS calculation using pre-loaded data cache
-// This is the REAL solution - we modify batch calculation to use cached rows
-func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, dataCache map[string][][]string) map[string]string {
+// batchCalculateSUMIFSWithCache performs batch SUMIFS calculation using worksheetCache
+// This is the REAL solution - we modify batch calculation to use unified worksheetCache
+func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, worksheetCache *WorksheetCache) map[string]string {
 	results := make(map[string]string)
 
 	// Group formulas by pattern (same logic as batchCalculateSUMIFS)
@@ -293,10 +286,10 @@ func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, dataCac
 		}
 	}
 
-	// Calculate each pattern using cached data
+	// Calculate each pattern using worksheetCache
 	for _, pattern := range patterns2D {
-		// 关键修改：使用缓存数据而不是调用 GetRows
-		patternResults := f.calculateSUMIFS2DPatternWithCache(pattern, dataCache)
+		// 关键修改：使用 worksheetCache 而不是调用 GetRows
+		patternResults := f.calculateSUMIFS2DPatternWithCache(pattern, worksheetCache)
 		for cell, value := range patternResults {
 			results[cell] = fmt.Sprintf("%v", value)
 		}
@@ -305,8 +298,8 @@ func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, dataCac
 	return results
 }
 
-// calculateSUMIFS2DPatternWithCache calculates SUMIFS using cached row data
-func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, dataCache map[string][][]string) map[string]float64 {
+// calculateSUMIFS2DPatternWithCache calculates SUMIFS using worksheetCache
+func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, worksheetCache *WorksheetCache) map[string]float64 {
 	sourceSheet := extractSheetName(pattern.sumRangeRef)
 	if sourceSheet == "" {
 		return map[string]float64{}
@@ -320,16 +313,9 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, dataC
 		return map[string]float64{}
 	}
 
-	// 关键优化：使用缓存的数据！
-	rows, exists := dataCache[sourceSheet]
-	if !exists {
-		// 如果缓存中没有，降级到读取（但这不应该发生）
-		var err error
-		rows, err = f.GetRows(sourceSheet)
-		if err != nil || len(rows) == 0 {
-			return map[string]float64{}
-		}
-	}
+	// 关键优化：使用 worksheetCache 的数据！
+	sheetData := worksheetCache.GetSheet(sourceSheet)
+	rows := f.convertCacheToRows(sheetData)
 
 	// Build result map by scanning once (使用缓存数据)
 	resultMap := f.scanRowsAndBuildResultMap(sourceSheet, rows, sumCol, criteria1Col, criteria2Col)
@@ -340,9 +326,9 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, dataC
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		// 优先从 calcCache 读取计算结果（处理公式单元格依赖）
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
-		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
+		// 优先从 worksheetCache 读取计算结果（处理公式单元格依赖）
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell, worksheetCache)
+		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell, worksheetCache)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {
@@ -497,7 +483,8 @@ func (f *File) calculateSUMIFS1DPattern(pattern *sumifs1DPattern) map[string]flo
 		// Remove $ from cell references before calling GetCellValue
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
+		// Note: This function doesn't have worksheetCache, so use direct GetCellValue as fallback
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
 
 		if val, ok := resultMap[c1]; ok {
 			results[fullCell] = val
@@ -782,8 +769,9 @@ func (f *File) calculateSUMIFS2DPattern(pattern *sumifs2DPattern) map[string]flo
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
-		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
+		// Note: This function doesn't have worksheetCache, so use direct GetCellValue as fallback
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {
@@ -1158,8 +1146,9 @@ func (f *File) calculateAVERAGEIFS2DPattern(pattern *averageifs2DPattern) map[st
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell)
-		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell)
+		// Note: This function doesn't have worksheetCache, so use direct GetCellValue as fallback
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
 
 		if resultMap[c1] != nil {
 			if avgData, ok := resultMap[c1][c2]; ok {
