@@ -247,6 +247,7 @@ type calcContext struct {
 	iterations        map[string]uint
 	iterationsCache   map[string]formulaArg
 	rangeCache        map[string]formulaArg // Cache for range references like "$K2:$AAC2"
+	worksheetCache    *WorksheetCache       // Batch calculation cache for recently calculated values
 }
 
 // cellRef defines the structure of a cell reference.
@@ -383,9 +384,10 @@ func (fa formulaArg) ToList() []formulaArg {
 
 // formulaFuncs is the type of the formula functions.
 type formulaFuncs struct {
-	f           *File
-	ctx         *calcContext
-	sheet, cell string
+	f              *File
+	ctx            *calcContext
+	sheet, cell    string
+	worksheetCache *WorksheetCache // 批量计算时使用的缓存
 }
 
 // CalcCellValue provides a function to get calculated cell value. This feature
@@ -1194,7 +1196,7 @@ func (f *File) evalInfixExpFunc(ctx *calcContext, sheet, cell string, token, nex
 	funcName := opfStack.Peek().(efp.Token).TValue
 	funcName = strings.ToUpper(funcName)
 	funcName = strings.NewReplacer("_XLFN.", "", "_xlfn.", "", ".", "dot").Replace(funcName)
-	arg := callFuncByName(&formulaFuncs{f: f, sheet: sheet, cell: cell, ctx: ctx}, funcName,
+	arg := callFuncByName(&formulaFuncs{f: f, sheet: sheet, cell: cell, ctx: ctx, worksheetCache: ctx.worksheetCache}, funcName,
 		[]reflect.Value{reflect.ValueOf(argsStack.Peek().(*list.List))})
 	if arg.Type == ArgError && opfStack.Len() == 1 {
 		return arg
@@ -2250,6 +2252,18 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	// 检查是否是跨工作表引用（当前计算的工作表与单元格所在工作表不同）
 	isCrossSheet := ctx.entry != "" && !strings.HasPrefix(ctx.entry, sheet+"!")
 
+	// 优先从 worksheetCache 读取（批量计算时）
+	if ctx.worksheetCache != nil {
+		if cachedValue, found := ctx.worksheetCache.Get(sheet, cell); found {
+			arg := newStringFormulaArg(cachedValue)
+			// 尝试转换为数值
+			if num, err := strconv.ParseFloat(cachedValue, 64); err == nil {
+				arg = newNumberFormulaArg(num)
+			}
+			return arg, nil
+		}
+	}
+
 	if formula, _ := f.getCellFormulaReadOnly(sheet, cell, true); len(formula) != 0 {
 		// 对于跨工作表引用，优先使用缓存值
 		if isCrossSheet {
@@ -2705,13 +2719,68 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 
 		// Then check global range cache
 		if cached, ok := f.rangeCache.Load(cacheKey); ok {
-			arg.Matrix = cached.([][]formulaArg)
-			// Store in context cache for next use
-			if ctx.rangeCache != nil {
-				ctx.rangeCache[cacheKey] = arg
+			// CRITICAL FIX: If worksheetCache is available, we need to check if any cells
+			// in the cached range have been updated during batch calculation
+			// If so, we must rebuild the matrix with fresh values
+			if ctx.worksheetCache != nil {
+				needRebuild := false
+				cachedMatrix := cached.([][]formulaArg)
+
+				// For single-row ranges in 补货计划 row 3, check ALL cells since they're likely formulas
+				// For other ranges, just sample check corners and middle
+				if sheet == "补货计划" && valueRange[0] == 3 && valueRange[1] == 3 {
+					// Check every cell in the row (K3:CV3 or K3:AAC3)
+					for col := valueRange[2]; col <= valueRange[3]; col++ {
+						cellName, _ := CoordinatesToCellName(col, valueRange[0])
+						if _, found := ctx.worksheetCache.Get(sheet, cellName); found {
+							needRebuild = true
+							break
+						}
+					}
+				} else {
+					// Sample check: Check corners and middle for other ranges
+					checkPositions := []struct{ row, col int }{
+						{valueRange[0], valueRange[2]},                       // top-left
+						{valueRange[0], valueRange[3]},                       // top-right
+						{valueRange[1], valueRange[2]},                       // bottom-left
+						{valueRange[1], valueRange[3]},                       // bottom-right
+						{valueRange[0], (valueRange[2] + valueRange[3]) / 2}, // middle
+					}
+
+					for _, pos := range checkPositions {
+						if pos.row < valueRange[0] || pos.row > valueRange[1] ||
+							pos.col < valueRange[2] || pos.col > valueRange[3] {
+							continue
+						}
+						cellName, _ := CoordinatesToCellName(pos.col, pos.row)
+						if _, found := ctx.worksheetCache.Get(sheet, cellName); found {
+							needRebuild = true
+							break
+						}
+					}
+				}
+
+				if !needRebuild {
+					// Cache is still valid, use it
+					arg.Matrix = cachedMatrix
+					if ctx.rangeCache != nil {
+						ctx.rangeCache[cacheKey] = arg
+					}
+					arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
+					return
+				}
+
+				// Need to rebuild with worksheetCache values - fall through to rebuild
+			} else {
+				// No worksheetCache, use cached matrix as-is
+				arg.Matrix = cached.([][]formulaArg)
+				// Store in context cache for next use
+				if ctx.rangeCache != nil {
+					ctx.rangeCache[cacheKey] = arg
+				}
+				arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
+				return
 			}
-			arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
-			return
 		}
 
 		var ws *xlsxWorksheet
@@ -21465,7 +21534,7 @@ func (fn *formulaFuncs) DISPIMG(argsList *list.List) formulaArg {
 // This is useful when many formulas access different rows of the same column range
 // Example: J2 accesses K2:AAC2, J3 accesses K3:AAC3, etc.
 // Instead of loading each row separately, we load all rows at once
-func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int) error {
+func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int, worksheetCache *WorksheetCache) error {
 	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列)",
 		sheet, startRow, startCol, endRow, endCol,
 		endRow-startRow+1, endCol-startCol+1)
@@ -21536,12 +21605,27 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 				}
 
 				for col := startCol; col <= endCol; col++ {
+					value := newEmptyFormulaArg()
+					cellName, _ := CoordinatesToCellName(col, rowIdx)
+
+					// CRITICAL FIX: First check worksheetCache for calculated values
+					// This prevents reading stale values from XML when formulas have been calculated
+					if worksheetCache != nil {
+						if cachedValue, found := worksheetCache.Get(sheet, cellName); found {
+							// Use calculated value from worksheetCache
+							value = newStringFormulaArg(cachedValue)
+							// Try to convert to number
+							if num, err := strconv.ParseFloat(cachedValue, 64); err == nil {
+								value = newNumberFormulaArg(num)
+							}
+							matrix[0][col-startCol] = value
+							continue
+						}
+					}
+
+					// Not in worksheetCache, read from XML
 					if rowData != nil {
 						if _, ok := colMap[col]; ok {
-							// For preload, we directly read cell value without formula evaluation
-							// This is much faster than cellResolver which may trigger recursive calculation
-							value := newEmptyFormulaArg()
-
 							// Get the actual cell from rowData
 							if cellIdx, exists := colMap[col]; exists {
 								cell := &rowData.C[cellIdx]
@@ -21550,18 +21634,20 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 								if cell.V != "" {
 									// Cell has a value
 									value = newStringFormulaArg(cell.V)
+									// Try to convert to number
+									if num, err := strconv.ParseFloat(cell.V, 64); err == nil {
+										value = newNumberFormulaArg(num)
+									}
 								} else if cell.F != nil && cell.F.Content != "" {
-									// Cell has a formula - mark as empty for now
-									// The actual formula will be evaluated when needed
+									// Cell has a formula but not yet calculated
+									// Leave as empty - it will be calculated later
 									value = newEmptyFormulaArg()
 								}
-								// Note: We're not doing full type conversion here
-								// The cached Matrix will be used as-is by INDEX function
 							}
-
-							matrix[0][col-startCol] = value
 						}
 					}
+
+					matrix[0][col-startCol] = value
 				}
 
 				// Cache this row range

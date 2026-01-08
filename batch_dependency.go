@@ -509,11 +509,21 @@ func extractDependenciesWithColumnIndex(formula, currentSheet, currentCell strin
 								}
 							}
 						} else {
-							// Regular range
-							for _, cell := range rangeParts {
-								cleanCell := strings.ReplaceAll(cell, "$", "")
-								if cleanCell != "" {
-									deps[currentSheet+"!"+cleanCell] = true
+							// Regular range like K3:CV3 or A1:B10
+							// Need to expand to all formula cells in the range
+							expanded := expandRangeToFormulaCells(currentSheet, start, end, columnIndex)
+							if len(expanded) > 0 {
+								// Successfully expanded
+								for _, cell := range expanded {
+									deps[cell] = true
+								}
+							} else {
+								// Fallback: just add the endpoints
+								for _, cell := range rangeParts {
+									cleanCell := strings.ReplaceAll(cell, "$", "")
+									if cleanCell != "" {
+										deps[currentSheet+"!"+cleanCell] = true
+									}
 								}
 							}
 						}
@@ -596,7 +606,7 @@ func (f *File) calculateByDependencyLevels(graph *dependencyGraph) {
 		individualDuration := time.Duration(0)
 		if len(remainingCells) > 0 {
 			individualStart := time.Now()
-			individualResults := f.parallelCalculateCells(remainingCells, subExprCache, graph)
+			individualResults := f.parallelCalculateCells(remainingCells, subExprCache, nil, graph)
 			individualDuration = time.Since(individualStart)
 
 			// Count how many cells used the cache
@@ -762,7 +772,7 @@ func (f *File) batchCalculateLevel(cells []string, graph *dependencyGraph) (map[
 
 // parallelCalculateCells calculates a list of cells in parallel
 // Now accepts a SubExpressionCache for composite formulas and graph for lock-free formula access
-func (f *File) parallelCalculateCells(cells []string, subExprCache *SubExpressionCache, graph *dependencyGraph) map[string]string {
+func (f *File) parallelCalculateCells(cells []string, subExprCache *SubExpressionCache, worksheetCache *WorksheetCache, graph *dependencyGraph) map[string]string {
 	results := make(map[string]string)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -811,7 +821,7 @@ func (f *File) parallelCalculateCells(cells []string, subExprCache *SubExpressio
 					}
 				}
 
-				value, err := f.CalcCellValueWithSubExprCache(sheet, cellName, formula, subExprCache, opts)
+				value, err := f.CalcCellValueWithSubExprCache(sheet, cellName, formula, subExprCache, worksheetCache, opts)
 
 				if err != nil {
 					continue
@@ -1095,7 +1105,7 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 					levelIdx, sheet, pattern.key.startCol, pattern.key.endCol, pattern.count, minRow, maxRow)
 
 				// Preload this column range
-				if err := f.PreloadColumnRange(sheet, minRow, maxRow, pattern.key.startCol, pattern.key.endCol); err != nil {
+				if err := f.PreloadColumnRange(sheet, minRow, maxRow, pattern.key.startCol, pattern.key.endCol, worksheetCache); err != nil {
 					log.Printf("  ⚠️  [Level %d Preload] Failed to preload %s C%d:C%d: %v",
 						levelIdx, sheet, pattern.key.startCol, pattern.key.endCol, err)
 				}
@@ -1113,9 +1123,22 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		// 步骤3：使用 DAG 调度器动态计算当前层
 		// ========================================
 		dagStart := time.Now()
-		scheduler := f.NewDAGSchedulerForLevel(graph, levelIdx, levelCells, numWorkers, subExprCache, worksheetCache)
-		scheduler.Run()
-		dagDuration := time.Since(dagStart)
+		scheduler, ok := f.NewDAGSchedulerForLevel(graph, levelIdx, levelCells, numWorkers, subExprCache, worksheetCache)
+		dagDuration := time.Duration(0)
+		if !ok || scheduler == nil {
+			log.Printf("  ⚠️  [Level %d] 检测到循环依赖，退回顺序计算", levelIdx)
+			results := f.parallelCalculateCells(levelCells, subExprCache, worksheetCache, graph)
+			for cell, value := range results {
+				parts := strings.Split(cell, "!")
+				if len(parts) == 2 {
+					f.storeCalculatedValue(parts[0], parts[1], value, worksheetCache)
+				}
+			}
+			dagDuration = time.Since(dagStart)
+		} else {
+			scheduler.Run()
+			dagDuration = time.Since(dagStart)
+		}
 
 		// 更新全局进度
 		totalCompleted += int64(len(levelCells))
@@ -1599,4 +1622,58 @@ func (f *File) batchOptimizeLevel(levelIdx int, levelCells []string, graph *depe
 	log.Printf("  ✅ [Level %d Batch] Completed in %v, cache size: %d", levelIdx, batchDuration, subExprCache.Len())
 
 	return subExprCache
+}
+
+// expandRangeToFormulaCells expands a cell range (e.g., K3:CV3) to all formula cells within that range
+// using the columnIndex to efficiently find formula cells
+func expandRangeToFormulaCells(sheet, startCell, endCell string, columnIndex map[string][]string) []string {
+	result := make([]string, 0)
+
+	// Parse start and end cells
+	startCol, startRow, err1 := CellNameToCoordinates(startCell)
+	endCol, endRow, err2 := CellNameToCoordinates(endCell)
+
+	if err1 != nil || err2 != nil {
+		return result
+	}
+
+	// Ensure start <= end
+	if startRow > endRow {
+		startRow, endRow = endRow, startRow
+	}
+	if startCol > endCol {
+		startCol, endCol = endCol, startCol
+	}
+
+	// Expand the range by checking each column's formula cells
+	for col := startCol; col <= endCol; col++ {
+		colName, _ := ColumnNumberToName(col)
+		key := sheet + "!" + colName
+
+		if formulas, exists := columnIndex[key]; exists {
+			// Check each formula cell in this column
+			for _, formulaCell := range formulas {
+				// Extract row number from formula cell (e.g., "Sheet1!K3" -> 3)
+				parts := strings.Split(formulaCell, "!")
+				if len(parts) == 2 {
+					_, row, err := CellNameToCoordinates(parts[1])
+					if err == nil && row >= startRow && row <= endRow {
+						result = append(result, formulaCell)
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// parseCell parses a cell reference like "K3" and returns (row, col) both 1-based
+// Returns (-1, -1) if parsing fails
+func parseCell(cellRef string) (int, int) {
+	col, row, err := CellNameToCoordinates(cellRef)
+	if err != nil {
+		return -1, -1
+	}
+	return row, col
 }

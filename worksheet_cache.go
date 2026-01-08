@@ -63,45 +63,31 @@ func (wc *WorksheetCache) GetSheet(sheet string) map[string]string {
 // LoadSheet 加载整个 sheet 的数据到缓存
 // 用于初始化阶段批量加载非公式单元格的值
 func (wc *WorksheetCache) LoadSheet(f *File, sheet string) error {
+	// 先确保 map 初始化
 	wc.mu.Lock()
-	defer wc.mu.Unlock()
-
-	// 确保 sheet 缓存存在
 	if _, ok := wc.cache[sheet]; !ok {
 		wc.cache[sheet] = make(map[string]string)
 	}
+	wc.mu.Unlock()
 
-	// 读取所有行
-	rows, err := f.GetRows(sheet, Options{RawCellValue: true})
-	if err != nil {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil || ws == nil || ws.SheetData.Row == nil {
 		return err
 	}
 
-	// 遍历所有单元格，存储非公式单元格的值
-	for rowIdx, row := range rows {
-		for colIdx, cellValue := range row {
-			if cellValue == "" {
+	for _, row := range ws.SheetData.Row {
+		for _, cell := range row.C {
+			if cell.F != nil {
+				// 公式单元格的值通过计算阶段缓存
 				continue
 			}
-
-			// 构造单元格引用
-			cellRef, err := CoordinatesToCellName(colIdx+1, rowIdx+1)
-			if err != nil {
+			val, err := f.GetCellValue(sheet, cell.R, Options{RawCellValue: true})
+			if err != nil || val == "" {
 				continue
 			}
-
-			// 检查是否是公式单元格
-			formula, err := f.GetCellFormula(sheet, cellRef)
-			if err != nil || formula != "" {
-				// 是公式单元格，不缓存（公式的结果会在计算时缓存）
-				continue
-			}
-
-			// 非公式单元格，直接缓存原始值
-			wc.cache[sheet][cellRef] = cellValue
+			wc.Set(sheet, cell.R, val)
 		}
 	}
-
 	return nil
 }
 

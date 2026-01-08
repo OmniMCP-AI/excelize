@@ -2,6 +2,7 @@ package excelize
 
 import (
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,7 +93,8 @@ func (f *File) NewDAGScheduler(graph *dependencyGraph, numWorkers int, subExprCa
 
 // NewDAGSchedulerForLevel creates a DAG scheduler for a specific level
 // Only formulas within the level are scheduled (dependencies from previous levels are already completed)
-func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, levelCells []string, numWorkers int, subExprCache *SubExpressionCache, worksheetCache *WorksheetCache) *DAGScheduler {
+// Returns nil,false if level contains circular dependencies (no ready nodes)
+func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, levelCells []string, numWorkers int, subExprCache *SubExpressionCache, worksheetCache *WorksheetCache) (*DAGScheduler, bool) {
 	// 创建当前层的公式集合
 	levelCellsMap := make(map[string]bool)
 	for _, cell := range levelCells {
@@ -117,6 +119,8 @@ func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, lev
 		worksheetCache:  worksheetCache,
 	}
 
+	readyCount := 0
+
 	// 构建当前层内部的依赖关系
 	// 只考虑当前层内部的依赖（层与层之间的依赖已经满足）
 	for _, cell := range levelCells {
@@ -140,10 +144,15 @@ func (f *File) NewDAGSchedulerForLevel(graph *dependencyGraph, levelIdx int, lev
 		// 如果没有层内依赖，直接加入ready queue
 		if levelInternalDeps == 0 {
 			scheduler.readyQueue <- cell
+			readyCount++
 		}
 	}
 
-	return scheduler
+	if len(levelCells) > 0 && readyCount == 0 {
+		return nil, false
+	}
+
+	return scheduler, true
 }
 
 // Run executes the DAG scheduler
@@ -162,11 +171,8 @@ func (scheduler *DAGScheduler) Run() {
 	// 等待所有worker完成
 	wg.Wait()
 
-	// 关闭队列（可能已经被关闭了，所以要检查）
-	if !scheduler.queueClosed.Load() {
-		scheduler.queueClosed.Store(true)
-		close(scheduler.readyQueue)
-	}
+	// 确保队列关闭
+	scheduler.closeReadyQueue()
 
 	duration := time.Since(startTime)
 	log.Printf("✅ [DAG Scheduler] Completed %d formulas in %v (avg: %v/formula)",
@@ -208,28 +214,8 @@ func (scheduler *DAGScheduler) Run() {
 func (scheduler *DAGScheduler) worker(wg *sync.WaitGroup, workerID int) {
 	defer wg.Done()
 
-	for {
-		select {
-		case cell, ok := <-scheduler.readyQueue:
-			if !ok {
-				// Queue closed
-				return
-			}
-
-			// 执行计算
-			scheduler.executeFormula(cell)
-
-		default:
-			// Queue empty, check if we're done
-			completed := scheduler.completedCount.Load()
-
-			// Exit if all formulas are completed
-			if completed >= int64(scheduler.totalFormulas) {
-				return
-			}
-
-			// 不要 sleep，让 select 立即重试，提高响应速度
-		}
+	for cell := range scheduler.readyQueue {
+		scheduler.executeFormula(cell)
 	}
 }
 
@@ -260,22 +246,8 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	opts := Options{RawCellValue: true, MaxCalcIterations: 100}
 	calcStart := time.Now()
 
-	// DEBUG: 打印日销售表的计算
-	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
-		formulaPreview := formula
-		if len(formulaPreview) > 80 {
-			formulaPreview = formulaPreview[:80] + "..."
-		}
-		log.Printf("🧮 [CalcStart] %s!%s, formula: %s", sheet, cellName, formulaPreview)
-	}
-
-	value, err := scheduler.f.CalcCellValueWithSubExprCache(sheet, cellName, formula, scheduler.subExprCache, opts)
+	value, err := scheduler.f.CalcCellValueWithSubExprCache(sheet, cellName, formula, scheduler.subExprCache, scheduler.worksheetCache, opts)
 	calcDuration := time.Since(calcStart)
-
-	// DEBUG: 打印日销售表的计算结果
-	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
-		log.Printf("🧮 [CalcResult] %s!%s = '%s' (err: %v)", sheet, cellName, value, err)
-	}
 
 	// 记录慢速公式（超过5ms）
 	if calcDuration > 5*time.Millisecond {
@@ -299,14 +271,14 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	// 保存结果
 	scheduler.results.Store(cell, value)
 
-	// 写回缓存（不写worksheet，避免锁）
-	scheduler.writeBackToWorksheet(sheet, cellName, value)
-
-	// 标记完成
-	scheduler.completedCount.Add(1)
+	// 写回缓存和 worksheet
+	scheduler.f.storeCalculatedValue(sheet, cellName, value, scheduler.worksheetCache)
 
 	// 通知依赖此公式的其他公式
 	scheduler.notifyDependents(cell)
+
+	// 标记完成
+	scheduler.markFormulaDone()
 }
 
 // notifyDependents decrements dependency count for dependents and enqueues ready formulas
@@ -334,60 +306,6 @@ func (scheduler *DAGScheduler) notifyDependents(completedCell string) {
 }
 
 // writeBackToWorksheet writes calculated value back to worksheet
-func (scheduler *DAGScheduler) writeBackToWorksheet(sheet, cellName, value string) {
-	// 1. 写入 worksheetCache（优先，因为是统一缓存）
-	if scheduler.worksheetCache != nil {
-		scheduler.worksheetCache.Set(sheet, cellName, value)
-	}
-
-	// 2. 缓存计算结果到 calcCache（用于兼容性）
-	cacheKey := sheet + "!" + cellName
-	arg := newStringFormulaArg(value)
-	scheduler.f.calcCache.Store(cacheKey, arg)
-
-	// 同时也缓存带raw=true后缀的key，供其他地方使用
-	cacheKeyRaw := cacheKey + "!raw=true"
-	scheduler.f.calcCache.Store(cacheKeyRaw, value)
-
-	// DEBUG: 打印日销售表的写入
-	if sheet == "日销售" && (cellName == "B2" || cellName == "C2" || cellName == "D2" || cellName == "E2") {
-		log.Printf("🔧 [WriteBack] %s!%s = '%s' (写入 worksheetCache + calcCache)", sheet, cellName, value)
-	}
-
-	// 3. 写回worksheet的<v>标签，保留公式<f>标签
-	// 这样SaveAs时才能保存正确的计算值
-	scheduler.setFormulaValue(sheet, cellName, value)
-}
-
-// setFormulaValue 设置公式单元格的计算值，但保留公式本身
-func (scheduler *DAGScheduler) setFormulaValue(sheet, cellName, value string) {
-	// 获取worksheet
-	scheduler.f.mu.Lock()
-	ws, err := scheduler.f.workSheetReader(sheet)
-	if err != nil {
-		scheduler.f.mu.Unlock()
-		return
-	}
-	scheduler.f.mu.Unlock()
-
-	// 锁定worksheet
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	// 获取或创建单元格
-	c, _, _, err := ws.prepareCell(cellName)
-	if err != nil {
-		return
-	}
-
-	// 只更新V字段（值），不删除F字段（公式）
-	c.V = value
-	// 确保类型是字符串（如果没有特殊类型）
-	if c.T == "" {
-		c.T = "str"
-	}
-}
-
 // GetResults returns all calculated results
 func (scheduler *DAGScheduler) GetResults() map[string]string {
 	results := make(map[string]string)
@@ -396,4 +314,67 @@ func (scheduler *DAGScheduler) GetResults() map[string]string {
 		return true
 	})
 	return results
+}
+
+func (scheduler *DAGScheduler) markFormulaDone() {
+	newCount := scheduler.completedCount.Add(1)
+	if newCount == int64(scheduler.totalFormulas) {
+		scheduler.closeReadyQueue()
+	}
+}
+
+func (scheduler *DAGScheduler) closeReadyQueue() {
+	if scheduler.queueClosed.CompareAndSwap(false, true) {
+		close(scheduler.readyQueue)
+	}
+}
+
+// storeCalculatedValue persists the computed formula result to caches and worksheet
+func (f *File) storeCalculatedValue(sheet, cellName, value string, worksheetCache *WorksheetCache) {
+	if worksheetCache != nil {
+		worksheetCache.Set(sheet, cellName, value)
+	}
+
+	cacheKey := sheet + "!" + cellName
+	f.calcCache.Store(cacheKey, newStringFormulaArg(value))
+	f.calcCache.Store(cacheKey+"!raw=true", value)
+
+	f.setFormulaValue(sheet, cellName, value)
+}
+
+func (f *File) setFormulaValue(sheet, cellName, value string) {
+	f.mu.Lock()
+	ws, err := f.workSheetReader(sheet)
+	f.mu.Unlock()
+	if err != nil {
+		return
+	}
+
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	c, _, _, err := ws.prepareCell(cellName)
+	if err != nil {
+		return
+	}
+
+	c.V = value
+	c.T = inferCellValueType(value)
+}
+
+func inferCellValueType(value string) string {
+	if value == "" {
+		return ""
+	}
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return ""
+	}
+	upper := strings.ToUpper(value)
+	if upper == "TRUE" || upper == "FALSE" {
+		return "b"
+	}
+	if strings.HasPrefix(value, "#") {
+		return "e"
+	}
+	return "str"
 }

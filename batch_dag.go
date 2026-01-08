@@ -95,8 +95,11 @@ func (f *File) getCellValueLockFree(sheet, cell string, rawCellValue bool) (stri
 	// Try cache first
 	ref := fmt.Sprintf("%s!%s", sheet, cell)
 	if cached, ok := f.calcCache.Load(ref); ok {
-		if cachedStr, isString := cached.(string); isString {
-			return cachedStr, nil
+		switch v := cached.(type) {
+		case string:
+			return v, nil
+		case formulaArg:
+			return v.Value(), nil
 		}
 	}
 
