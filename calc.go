@@ -325,9 +325,14 @@ func (fa formulaArg) ToNumber() formulaArg {
 	var err error
 	switch fa.Type {
 	case ArgString:
-		n, err = strconv.ParseFloat(fa.String, 64)
-		if err != nil {
-			return newErrorFormulaArg(formulaErrorVALUE, err.Error())
+		// Excel 规则：空字符串转换为 0
+		if fa.String == "" {
+			n = 0
+		} else {
+			n, err = strconv.ParseFloat(fa.String, 64)
+			if err != nil {
+				return newErrorFormulaArg(formulaErrorVALUE, err.Error())
+			}
 		}
 	case ArgNumber:
 		n = fa.Number

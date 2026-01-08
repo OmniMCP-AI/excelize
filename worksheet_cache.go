@@ -84,11 +84,8 @@ func inferCellValueType(val string, cellType CellType) formulaArg {
 		return newStringFormulaArg(val)
 
 	default:
-		// 其他类型（字符串、日期等）：先尝试解析为数字
-		if num, err := strconv.ParseFloat(val, 64); err == nil {
-			return newNumberFormulaArg(num)
-		}
-		// 无法解析为数字，保持为字符串
+		// 其他类型（字符串、日期等）：保持原样为字符串
+		// 重要：不要尝试解析为数字，因为 Excel 中字符串 "0" 和数字 0 是不同的类型
 		return newStringFormulaArg(val)
 	}
 }

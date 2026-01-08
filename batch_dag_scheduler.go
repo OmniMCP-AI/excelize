@@ -332,9 +332,9 @@ func (scheduler *DAGScheduler) closeReadyQueue() {
 // storeCalculatedValue persists the computed formula result to caches and worksheet
 // Phase 1: 改为接收 formulaArg 并存储类型信息
 func (f *File) storeCalculatedValue(sheet, cellName, value string, worksheetCache *WorksheetCache) {
-	// 将字符串值转换为 formulaArg（推断类型）
-	cellType, _ := f.GetCellType(sheet, cellName)
-	arg := inferCellValueType(value, cellType)
+	// Phase 1: 对于公式计算结果，应该根据返回值本身推断类型，而不是根据单元格类型
+	// 因为公式单元格的 cellType 始终是 CellTypeUnset
+	arg := inferFormulaResultType(value)
 
 	// Phase 1: 存储 formulaArg 而不是字符串
 	if worksheetCache != nil {
@@ -347,6 +347,29 @@ func (f *File) storeCalculatedValue(sheet, cellName, value string, worksheetCach
 	f.calcCache.Store(cacheKey+"!raw=true", value)
 
 	f.setFormulaValue(sheet, cellName, value)
+}
+
+// inferFormulaResultType 根据公式返回值推断类型
+// 与 inferCellValueType 不同，这个函数专门用于处理公式计算结果
+func inferFormulaResultType(value string) formulaArg {
+	// 空字符串：返回字符串类型（很多公式用 "" 表示空值）
+	if value == "" {
+		return newStringFormulaArg("")
+	}
+
+	// 尝试解析为数字
+	if num, err := strconv.ParseFloat(value, 64); err == nil {
+		return newNumberFormulaArg(num)
+	}
+
+	// 检查布尔值
+	upper := strings.ToUpper(value)
+	if upper == "TRUE" || upper == "FALSE" {
+		return newBoolFormulaArg(upper == "TRUE")
+	}
+
+	// 其他情况：字符串
+	return newStringFormulaArg(value)
 }
 
 func (f *File) setFormulaValue(sheet, cellName, value string) {
