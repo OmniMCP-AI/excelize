@@ -2253,14 +2253,11 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	isCrossSheet := ctx.entry != "" && !strings.HasPrefix(ctx.entry, sheet+"!")
 
 	// 优先从 worksheetCache 读取（批量计算时）
+	// Phase 1: 现在 worksheetCache 直接返回 formulaArg，保留了类型信息
 	if ctx.worksheetCache != nil {
-		if cachedValue, found := ctx.worksheetCache.Get(sheet, cell); found {
-			arg := newStringFormulaArg(cachedValue)
-			// 尝试转换为数值
-			if num, err := strconv.ParseFloat(cachedValue, 64); err == nil {
-				arg = newNumberFormulaArg(num)
-			}
-			return arg, nil
+		if cachedArg, found := ctx.worksheetCache.Get(sheet, cell); found {
+			// 直接返回缓存的 formulaArg，无需重新解析
+			return cachedArg, nil
 		}
 	}
 
@@ -21611,13 +21608,9 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 					// CRITICAL FIX: First check worksheetCache for calculated values
 					// This prevents reading stale values from XML when formulas have been calculated
 					if worksheetCache != nil {
-						if cachedValue, found := worksheetCache.Get(sheet, cellName); found {
-							// Use calculated value from worksheetCache
-							value = newStringFormulaArg(cachedValue)
-							// Try to convert to number
-							if num, err := strconv.ParseFloat(cachedValue, 64); err == nil {
-								value = newNumberFormulaArg(num)
-							}
+						if cachedArg, found := worksheetCache.Get(sheet, cellName); found {
+							// Phase 1: 直接使用缓存的 formulaArg，无需重新解析
+							value = cachedArg
 							matrix[0][col-startCol] = value
 							continue
 						}

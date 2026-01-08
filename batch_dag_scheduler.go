@@ -330,13 +330,20 @@ func (scheduler *DAGScheduler) closeReadyQueue() {
 }
 
 // storeCalculatedValue persists the computed formula result to caches and worksheet
+// Phase 1: 改为接收 formulaArg 并存储类型信息
 func (f *File) storeCalculatedValue(sheet, cellName, value string, worksheetCache *WorksheetCache) {
+	// 将字符串值转换为 formulaArg（推断类型）
+	cellType, _ := f.GetCellType(sheet, cellName)
+	arg := inferCellValueType(value, cellType)
+
+	// Phase 1: 存储 formulaArg 而不是字符串
 	if worksheetCache != nil {
-		worksheetCache.Set(sheet, cellName, value)
+		worksheetCache.Set(sheet, cellName, arg)
 	}
 
+	// 保持与旧缓存的兼容性（暂时）
 	cacheKey := sheet + "!" + cellName
-	f.calcCache.Store(cacheKey, newStringFormulaArg(value))
+	f.calcCache.Store(cacheKey, arg)
 	f.calcCache.Store(cacheKey+"!raw=true", value)
 
 	f.setFormulaValue(sheet, cellName, value)
@@ -359,10 +366,11 @@ func (f *File) setFormulaValue(sheet, cellName, value string) {
 	}
 
 	c.V = value
-	c.T = inferCellValueType(value)
+	c.T = inferXMLCellType(value)
 }
 
-func inferCellValueType(value string) string {
+// inferXMLCellType 推断 XML 单元格类型（不是 formulaArg）
+func inferXMLCellType(value string) string {
 	if value == "" {
 		return ""
 	}

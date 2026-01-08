@@ -1373,9 +1373,12 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		// 将批量结果存入 worksheetCache 和 calcCache
 		for cell, value := range batchResults {
 			// Store in worksheetCache for subsequent reads
+			// Phase 1: 需要将字符串转换为 formulaArg
 			parts := strings.Split(cell, "!")
 			if len(parts) == 2 {
-				worksheetCache.Set(parts[0], parts[1], value)
+				cellType, _ := f.GetCellType(parts[0], parts[1])
+				arg := inferCellValueType(value, cellType)
+				worksheetCache.Set(parts[0], parts[1], arg)
 			}
 
 			// Store in calcCache for compatibility
@@ -1456,9 +1459,12 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			cleanExpr := strings.TrimSpace(indexMatchExpr)
 
 			// 所有批量计算的 INDEX-MATCH 结果都存入 worksheetCache
+			// Phase 1: 需要将字符串转换为 formulaArg
 			parts := strings.Split(cell, "!")
 			if len(parts) == 2 {
-				worksheetCache.Set(parts[0], parts[1], value)
+				cellType, _ := f.GetCellType(parts[0], parts[1])
+				arg := inferCellValueType(value, cellType)
+				worksheetCache.Set(parts[0], parts[1], arg)
 			}
 
 			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {

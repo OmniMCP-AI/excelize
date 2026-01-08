@@ -12,8 +12,9 @@ import (
 // This ensures all reads get the latest values (both original and calculated)
 func (f *File) getCellValueOrCalcCache(sheet, cell string, worksheetCache *WorksheetCache) string {
 	// Read from unified worksheetCache
-	if value, ok := worksheetCache.Get(sheet, cell); ok {
-		return value
+	// Phase 1: worksheetCache 现在返回 formulaArg，需要调用 Value() 转换为字符串
+	if argValue, ok := worksheetCache.Get(sheet, cell); ok {
+		return argValue.Value()
 	}
 
 	// If not in cache, read from worksheet (fallback for cells not pre-loaded)
@@ -343,7 +344,6 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, works
 
 	return results
 }
-
 
 // TestExtractSUMIFS2DPattern is exported for testing
 func TestExtractSUMIFS2DPattern(f *File, sheet, cell, formula string) *Sumifs2DPatternExport {

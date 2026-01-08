@@ -968,7 +968,8 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 
 // convertCacheToRows converts worksheetCache map format to [][]string format
 // This allows existing code to work with minimal changes
-func (f *File) convertCacheToRows(sheetData map[string]string) [][]string {
+// Phase 1: 改为接收 map[string]formulaArg
+func (f *File) convertCacheToRows(sheetData map[string]formulaArg) [][]string {
 	if len(sheetData) == 0 {
 		return [][]string{}
 	}
@@ -995,12 +996,13 @@ func (f *File) convertCacheToRows(sheetData map[string]string) [][]string {
 	}
 
 	// Fill in values
-	for cellRef, value := range sheetData {
+	// Phase 1: 调用 Value() 方法将 formulaArg 转换为字符串
+	for cellRef, argValue := range sheetData {
 		col, row, err := CellNameToCoordinates(cellRef)
 		if err != nil {
 			continue
 		}
-		rows[row-1][col-1] = value
+		rows[row-1][col-1] = argValue.Value()
 	}
 
 	return rows

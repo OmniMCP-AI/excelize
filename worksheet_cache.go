@@ -1,27 +1,28 @@
 package excelize
 
 import (
+	"strconv"
 	"sync"
 )
 
 // WorksheetCache 统一的工作表缓存，按 sheet 组织
 // 用于存储所有单元格的值（包括原始值和计算结果）
-// 这样可以避免多个缓存之间的不一致问题
+// Phase 1 重构：改为存储 formulaArg 以保留类型信息
 type WorksheetCache struct {
 	mu    sync.RWMutex
-	cache map[string]map[string]string // map[sheetName]map[cellRef]value
+	cache map[string]map[string]formulaArg // map[sheetName]map[cellRef]formulaArg
 }
 
 // NewWorksheetCache 创建新的工作表缓存
 func NewWorksheetCache() *WorksheetCache {
 	return &WorksheetCache{
-		cache: make(map[string]map[string]string),
+		cache: make(map[string]map[string]formulaArg),
 	}
 }
 
 // Get 获取单元格的值
-// 返回值和是否存在的标志
-func (wc *WorksheetCache) Get(sheet, cell string) (string, bool) {
+// 返回 formulaArg 和是否存在的标志
+func (wc *WorksheetCache) Get(sheet, cell string) (formulaArg, bool) {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
 
@@ -29,44 +30,76 @@ func (wc *WorksheetCache) Get(sheet, cell string) (string, bool) {
 		value, exists := sheetCache[cell]
 		return value, exists
 	}
-	return "", false
+	return newEmptyFormulaArg(), false
 }
 
 // Set 设置单元格的值
-func (wc *WorksheetCache) Set(sheet, cell, value string) {
+func (wc *WorksheetCache) Set(sheet, cell string, value formulaArg) {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
 	if _, ok := wc.cache[sheet]; !ok {
-		wc.cache[sheet] = make(map[string]string)
+		wc.cache[sheet] = make(map[string]formulaArg)
 	}
 	wc.cache[sheet][cell] = value
 }
 
 // GetSheet 获取整个 sheet 的数据（用于批量操作）
-// 返回 map[cellRef]value
-func (wc *WorksheetCache) GetSheet(sheet string) map[string]string {
+// 返回 map[cellRef]formulaArg
+func (wc *WorksheetCache) GetSheet(sheet string) map[string]formulaArg {
 	wc.mu.RLock()
 	defer wc.mu.RUnlock()
 
 	if sheetCache, ok := wc.cache[sheet]; ok {
 		// 返回副本，避免并发修改
-		result := make(map[string]string, len(sheetCache))
+		result := make(map[string]formulaArg, len(sheetCache))
 		for k, v := range sheetCache {
 			result[k] = v
 		}
 		return result
 	}
-	return make(map[string]string)
+	return make(map[string]formulaArg)
+}
+
+// inferCellValueType 根据单元格的原始值推断其类型并转换为 formulaArg
+// 这是 Phase 1 的核心：保留类型信息而不是只存字符串
+func inferCellValueType(val string, cellType CellType) formulaArg {
+	// 空字符串：保持为字符串类型（在比较时会被特殊处理为 0）
+	if val == "" {
+		return newStringFormulaArg("")
+	}
+
+	// 根据单元格类型判断
+	switch cellType {
+	case CellTypeBool:
+		// 布尔类型
+		return newBoolFormulaArg(val == "1" || val == "TRUE" || val == "true")
+
+	case CellTypeNumber, CellTypeUnset:
+		// 数值类型：尝试解析为数字
+		if num, err := strconv.ParseFloat(val, 64); err == nil {
+			return newNumberFormulaArg(num)
+		}
+		// 解析失败，作为字符串
+		return newStringFormulaArg(val)
+
+	default:
+		// 其他类型（字符串、日期等）：先尝试解析为数字
+		if num, err := strconv.ParseFloat(val, 64); err == nil {
+			return newNumberFormulaArg(num)
+		}
+		// 无法解析为数字，保持为字符串
+		return newStringFormulaArg(val)
+	}
 }
 
 // LoadSheet 加载整个 sheet 的数据到缓存
-// 用于初始化阶段批量加载非公式单元格的值
+// Phase 1 改进：读取时立即转换为 formulaArg，保留类型信息
 func (wc *WorksheetCache) LoadSheet(f *File, sheet string) error {
 	// 先确保 map 初始化
 	wc.mu.Lock()
 	if _, ok := wc.cache[sheet]; !ok {
-		wc.cache[sheet] = make(map[string]string)
+		wc.cache[sheet] = make(map[string]formulaArg)
 	}
 	wc.mu.Unlock()
 
@@ -81,11 +114,23 @@ func (wc *WorksheetCache) LoadSheet(f *File, sheet string) error {
 				// 公式单元格的值通过计算阶段缓存
 				continue
 			}
+			// 读取原始值（不格式化）
 			val, err := f.GetCellValue(sheet, cell.R, Options{RawCellValue: true})
 			if err != nil || val == "" {
+				// 空值也需要缓存（作为空字符串）
+				if val == "" && err == nil {
+					arg := newStringFormulaArg("")
+					wc.Set(sheet, cell.R, arg)
+				}
 				continue
 			}
-			wc.Set(sheet, cell.R, val)
+
+			// 获取单元格类型
+			cellType, _ := f.GetCellType(sheet, cell.R)
+
+			// 推断类型并转换为 formulaArg
+			arg := inferCellValueType(val, cellType)
+			wc.Set(sheet, cell.R, arg)
 		}
 	}
 	return nil
@@ -95,7 +140,7 @@ func (wc *WorksheetCache) LoadSheet(f *File, sheet string) error {
 func (wc *WorksheetCache) Clear() {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
-	wc.cache = make(map[string]map[string]string)
+	wc.cache = make(map[string]map[string]formulaArg)
 }
 
 // ClearSheet 清空指定 sheet 的缓存
