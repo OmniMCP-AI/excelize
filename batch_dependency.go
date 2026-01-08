@@ -1079,6 +1079,11 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 
 	// 逐层处理：批量优化 -> 动态调度计算
 	for levelIdx, levelCells := range graph.levels {
+		if len(levelCells) == 0 {
+			log.Printf("\n⚠️  [Level %d] Skipping empty level", levelIdx)
+			continue
+		}
+
 		levelStart := time.Now()
 		log.Printf("\n🔄 [Level %d] Processing %d formulas", levelIdx, len(levelCells))
 
@@ -1087,7 +1092,11 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		// ========================================
 		// Detect if this level has formulas accessing the same column range across multiple rows
 		// If detected, preload the entire column range to avoid repeated single-row reads
-		columnRangePatterns := f.detectColumnRangePatterns(levelCells)
+		log.Printf("  🔍 [Level %d] Detecting column range patterns...", levelIdx)
+		detectStart := time.Now()
+		columnRangePatterns := f.detectColumnRangePatterns(levelCells, graph)
+		detectDuration := time.Since(detectStart)
+		log.Printf("  🔍 [Level %d] Pattern detection completed in %v, found %d sheets with patterns", levelIdx, detectDuration, len(columnRangePatterns))
 		for sheet, patterns := range columnRangePatterns {
 			for _, pattern := range patterns {
 				// Find min and max row numbers

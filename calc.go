@@ -21670,7 +21670,7 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 // detectColumnRangePatterns analyzes formulas to detect column range access patterns
 // Returns a map of sheet -> list of column ranges to preload
 // Example: If many formulas access different rows of K:AAC columns, we should preload the entire K:AAC range
-func (f *File) detectColumnRangePatterns(cells []string) map[string][]columnRangePattern {
+func (f *File) detectColumnRangePatterns(cells []string, graph *dependencyGraph) map[string][]columnRangePattern {
 	patterns := make(map[string]map[columnRangeKey]columnRangePattern)
 
 	for _, cell := range cells {
@@ -21679,11 +21679,13 @@ func (f *File) detectColumnRangePatterns(cells []string) map[string][]columnRang
 			continue
 		}
 		sheet := parts[0]
-		cellName := parts[1]
 
-		// Get formula
-		formula, err := f.getCellFormulaReadOnly(sheet, cellName, true)
-		if err != nil || formula == "" {
+		// Get formula from graph (lock-free and efficient)
+		var formula string
+		if node, exists := graph.nodes[cell]; exists {
+			formula = node.formula
+		}
+		if formula == "" {
 			continue
 		}
 
