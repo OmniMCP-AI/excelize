@@ -14153,7 +14153,7 @@ func (fn *formulaFuncs) EDATE(argsList *list.List) formulaArg {
 	if month.Number > 11 {
 		y += int(math.Floor(float64(m) / 12))
 	}
-	if m = m % 12; m < 0 {
+	if m = m % 12; m <= 0 {
 		m += 12
 	}
 	if d > 28 {

@@ -185,6 +185,10 @@ func isLeapYear(y int) bool {
 // getDaysInMonth provides a function to get the days by a given year and
 // month number.
 func getDaysInMonth(y, m int) int {
+	// 边界检查：月份必须在 1-12 范围内
+	if m < 1 || m > 12 {
+		return 0 // 或者返回错误，这里返回 0 作为安全值
+	}
 	if m == 2 && isLeapYear(y) {
 		return 29
 	}
