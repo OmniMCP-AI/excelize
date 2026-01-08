@@ -1124,13 +1124,16 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		// ========================================
 		// 步骤2：为当前层批量优化 SUMIFS（使用共享数据缓存）
 		// ========================================
+		log.Printf("  🔧 [Level %d] Starting batch optimization...", levelIdx)
 		batchOptStart := time.Now()
 		subExprCache := f.batchOptimizeLevelWithCache(levelIdx, levelCells, graph, worksheetCache)
 		batchOptDuration := time.Since(batchOptStart)
+		log.Printf("  ✅ [Level %d] Batch optimization completed in %v", levelIdx, batchOptDuration)
 
 		// ========================================
 		// 步骤3：使用 DAG 调度器动态计算当前层
 		// ========================================
+		log.Printf("  🚀 [Level %d] Creating DAG scheduler...", levelIdx)
 		dagStart := time.Now()
 		scheduler, ok := f.NewDAGSchedulerForLevel(graph, levelIdx, levelCells, numWorkers, subExprCache, worksheetCache)
 		dagDuration := time.Duration(0)
@@ -1145,8 +1148,10 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 			}
 			dagDuration = time.Since(dagStart)
 		} else {
+			log.Printf("  🚀 [Level %d] DAG scheduler created, starting execution with %d workers...", levelIdx, numWorkers)
 			scheduler.Run()
 			dagDuration = time.Since(dagStart)
+			log.Printf("  ✅ [Level %d] DAG execution completed in %v", levelIdx, dagDuration)
 		}
 
 		// 更新全局进度

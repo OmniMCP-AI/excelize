@@ -228,8 +228,8 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	parts := strings.Split(cell, "!")
 	if len(parts) != 2 {
 		log.Printf("⚠️ [DAG Scheduler] Invalid cell reference: %s", cell)
-		scheduler.completedCount.Add(1)
 		scheduler.notifyDependents(cell)
+		scheduler.markFormulaDone()
 		return
 	}
 
@@ -263,8 +263,8 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	if err != nil {
 		// 计算失败，仍然标记为完成，但不缓存结果
 		// 这样依赖它的公式仍然可以继续（可能会读到空值或错误）
-		scheduler.completedCount.Add(1)
 		scheduler.notifyDependents(cell)
+		scheduler.markFormulaDone()
 		return
 	}
 
