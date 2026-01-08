@@ -733,7 +733,6 @@ func (f *File) getCellFormulaReadOnly(sheet, cell string, transformed bool) (str
 	})
 }
 
-
 // FormulaOpts can be passed to SetCellFormula to use other formula types.
 type FormulaOpts struct {
 	Type *string // Formula type
@@ -867,7 +866,9 @@ func (f *File) SetCellFormula(sheet, cell, formula string, opts ...FormulaOpts) 
 			c.F.Ref = *opt.Ref
 		}
 	}
-	c.T, c.IS = "str", nil
+	// Clear cell value and type when setting formula
+	// The actual type will be determined by the formula calculation result
+	c.T, c.V, c.IS = "", "", nil
 	return err
 }
 
@@ -1812,7 +1813,6 @@ func (ws *xlsxWorksheet) mergeCellsParserReadOnly(cell string) (string, error) {
 	}
 	return cell, nil
 }
-
 
 // checkCellInRangeRef provides a function to determine if a given cell reference
 // in a range.
