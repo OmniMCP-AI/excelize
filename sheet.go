@@ -152,10 +152,10 @@ func (f *File) mergeExpandedCols(ws *xlsxWorksheet) {
 // serialize structure.
 func (f *File) workSheetWriter() {
 	var (
-		arr     []byte
-		buffer  = bytes.NewBuffer(arr)
-		encoder = xml.NewEncoder(buffer)
-		toDelete []string  // Collect sheets to delete after Range completes
+		arr      []byte
+		buffer   = bytes.NewBuffer(arr)
+		encoder  = xml.NewEncoder(buffer)
+		toDelete []string // Collect sheets to delete after Range completes
 	)
 	f.Sheet.Range(func(p, ws interface{}) bool {
 		if ws != nil {
@@ -2202,6 +2202,12 @@ func (f *File) relsReader(path string) (*xlsxRelationships, error) {
 // row to accept data. Missing rows are backfilled and given their row number
 // Uses the last populated row as a hint for the size of the next row to add
 func (ws *xlsxWorksheet) prepareSheetXML(col, row int) {
+	if row < 1 {
+		row = 1
+	}
+	if col < 1 {
+		col = 1
+	}
 	rowCount := len(ws.SheetData.Row)
 	sizeHint := 0
 	var ht *float64
@@ -2218,6 +2224,23 @@ func (ws *xlsxWorksheet) prepareSheetXML(col, row int) {
 		for rowIdx := rowCount; rowIdx < row; rowIdx++ {
 			ws.SheetData.Row = append(ws.SheetData.Row, xlsxRow{R: rowIdx + 1, CustomHeight: customHeight, Ht: ht, C: make([]xlsxC, 0, sizeHint)})
 		}
+		rowCount = len(ws.SheetData.Row)
+	}
+	// Guard against concurrent trimRow that might have removed rows after the previous append.
+	if rowCount < row {
+		for rowIdx := rowCount; rowIdx < row; rowIdx++ {
+			ws.SheetData.Row = append(ws.SheetData.Row, xlsxRow{R: rowIdx + 1, CustomHeight: customHeight, Ht: ht, C: make([]xlsxC, 0, sizeHint)})
+		}
+	}
+	if row > len(ws.SheetData.Row) {
+		// As a final safeguard, ensure the slice is large enough.
+		for len(ws.SheetData.Row) < row {
+			rowIdx := len(ws.SheetData.Row)
+			ws.SheetData.Row = append(ws.SheetData.Row, xlsxRow{R: rowIdx + 1, CustomHeight: customHeight, Ht: ht, C: make([]xlsxC, 0, sizeHint)})
+		}
+	}
+	if row < 1 || row > len(ws.SheetData.Row) {
+		return
 	}
 	rowData := &ws.SheetData.Row[row-1]
 	fillColumns(rowData, col, row)

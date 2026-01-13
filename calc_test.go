@@ -1139,8 +1139,7 @@ func TestCalcCellValue(t *testing.T) {
 		// GEOMEAN
 		"GEOMEAN(2.5,3,0.5,1,3)": "1.6226711115996",
 		// HARMEAN
-		"HARMEAN(2.5,3,0.5,1,3)":               "1.22950819672131",
-		"HARMEAN(\"2.5\",3,0.5,1,INT(3),\"\")": "1.22950819672131",
+		"HARMEAN(2.5,3,0.5,1,3)": "1.22950819672131",
 		// HYPGEOM.DIST
 		"HYPGEOM.DIST(0,3,3,9,TRUE)":   "0.238095238095238",
 		"HYPGEOM.DIST(1,3,3,9,TRUE)":   "0.773809523809524",
@@ -2199,7 +2198,6 @@ func TestCalcCellValue(t *testing.T) {
 		"NPER(0,-6000,50000)":              "8.33333333333333",
 		"NPER(0.06/4,-2000,60000,30000,1)": "52.7947737092748",
 		// NPV
-		"NPV(0.02,-5000,\"\",800)": "-4133.02575932334",
 		// ODDFPRICE
 		"ODDFPRICE(\"02/01/2017\",\"03/31/2021\",\"12/01/2016\",\"03/31/2017\",5.5%,3.5%,100,2)":       "107.691830256629",
 		"ODDFPRICE(\"02/01/2017\",\"03/31/2021\",\"12/01/2016\",\"03/31/2017\",5.5%,3.5%,100,4,1)":     "106.766915010929",
@@ -2377,8 +2375,8 @@ func TestCalcCellValue(t *testing.T) {
 		"BITRSHIFT(-1,2)":    {"#NUM!", "#NUM!"},
 		"BITRSHIFT(2^48,2)":  {"#NUM!", "#NUM!"},
 		"BITRSHIFT(1,-1)":    {"#NUM!", "#NUM!"},
-		"BITRSHIFT(\"\",-1)": {"#NUM!", "#NUM!"},
-		"BITRSHIFT(1,\"\")":  {"#NUM!", "#NUM!"},
+		"BITRSHIFT(\"\",-1)": {"#VALUE!", emptyStringNumberError},
+		"BITRSHIFT(1,\"\")":  {"#VALUE!", emptyStringNumberError},
 		"BITRSHIFT(1,2^48)":  {"#NUM!", "#NUM!"},
 		// BITXOR
 		"BITXOR()":        {"#VALUE!", "BITXOR requires 2 numeric arguments"},
@@ -3225,9 +3223,10 @@ func TestCalcCellValue(t *testing.T) {
 		"GEOMEAN(D1:D2)": {"#NUM!", "#NUM!"},
 		"GEOMEAN(\"\")":  {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
 		// HARMEAN
-		"HARMEAN()":   {"#VALUE!", "HARMEAN requires at least 1 argument"},
-		"HARMEAN(-1)": {"#N/A", "#N/A"},
-		"HARMEAN(0)":  {"#N/A", "#N/A"},
+		"HARMEAN()":                            {"#VALUE!", "HARMEAN requires at least 1 argument"},
+		"HARMEAN(-1)":                          {"#N/A", "#N/A"},
+		"HARMEAN(0)":                           {"#N/A", "#N/A"},
+		"HARMEAN(\"2.5\",3,0.5,1,INT(3),\"\")": {"#VALUE!", emptyStringNumberError},
 		// HYPGEOM.DIST
 		"HYPGEOM.DIST()":                  {"#VALUE!", "HYPGEOM.DIST requires 5 arguments"},
 		"HYPGEOM.DIST(\"\",4,4,12,FALSE)": {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
@@ -4413,8 +4412,9 @@ func TestCalcCellValue(t *testing.T) {
 		"NPER(0,0,0,\"\",0)": {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
 		"NPER(0,0,0,0,\"\")": {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
 		// NPV
-		"NPV()":       {"#VALUE!", "NPV requires at least 2 arguments"},
-		"NPV(\"\",0)": {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
+		"NPV()":                    {"#VALUE!", "NPV requires at least 2 arguments"},
+		"NPV(\"\",0)":              {"#VALUE!", "strconv.ParseFloat: parsing \"\": invalid syntax"},
+		"NPV(0.02,-5000,\"\",800)": {"#VALUE!", emptyStringNumberError},
 		// ODDFPRICE
 		"ODDFPRICE()": {"#VALUE!", "ODDFPRICE requires 8 or 9 arguments"},
 		"ODDFPRICE(\"\",\"03/31/2021\",\"12/01/2016\",\"03/31/2017\",5.5%,3.5%,100,2)":                {"#VALUE!", "#VALUE!"},

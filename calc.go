@@ -239,6 +239,8 @@ var (
 	thMinus  = "\u0E25\u0E1A"
 )
 
+const emptyStringNumberError = "strconv.ParseFloat: parsing \"\": invalid syntax"
+
 // calcContext defines the formula execution context.
 type calcContext struct {
 	mu                sync.Mutex
@@ -319,20 +321,27 @@ func (fa formulaArg) Value() (value string) {
 	return
 }
 
+// isLiteralEmptyString reports whether the argument is an explicit empty string literal.
+func isLiteralEmptyString(arg formulaArg) bool {
+	return arg.Type == ArgString && arg.String == ""
+}
+
+func newEmptyStringNumberErrorArg() formulaArg {
+	return newErrorFormulaArg(formulaErrorVALUE, emptyStringNumberError)
+}
+
 // ToNumber returns a formula argument with number data type.
 func (fa formulaArg) ToNumber() formulaArg {
 	var n float64
 	var err error
 	switch fa.Type {
 	case ArgString:
-		// Excel 规则：空字符串转换为 0
 		if fa.String == "" {
-			n = 0
-		} else {
-			n, err = strconv.ParseFloat(fa.String, 64)
-			if err != nil {
-				return newErrorFormulaArg(formulaErrorVALUE, err.Error())
-			}
+			return newEmptyStringNumberErrorArg()
+		}
+		n, err = strconv.ParseFloat(fa.String, 64)
+		if err != nil {
+			return newErrorFormulaArg(formulaErrorVALUE, err.Error())
 		}
 	case ArgNumber:
 		n = fa.Number
@@ -998,6 +1007,11 @@ func newNumberFormulaArg(n float64) formulaArg {
 	}
 	return formulaArg{Type: ArgNumber, Number: n}
 }
+
+const (
+	negBinomCDFMaxIter   = 1000000
+	nearIntegerTolerance = 1e-9
+)
 
 // newStringFormulaArg constructs a string formula argument.
 func newStringFormulaArg(s string) formulaArg {
@@ -3260,7 +3274,15 @@ func (fn *formulaFuncs) bitwise(name string, argsList *list.List) formulaArg {
 	if argsList.Len() != 2 {
 		return newErrorFormulaArg(formulaErrorVALUE, fmt.Sprintf("%s requires 2 numeric arguments", name))
 	}
-	num1, num2 := argsList.Front().Value.(formulaArg).ToNumber(), argsList.Back().Value.(formulaArg).ToNumber()
+	arg1 := argsList.Front().Value.(formulaArg)
+	arg2 := argsList.Back().Value.(formulaArg)
+	if isLiteralEmptyString(arg1) || isLiteralEmptyString(arg2) {
+		if name == "BITRSHIFT" {
+			return newEmptyStringNumberErrorArg()
+		}
+		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+	}
+	num1, num2 := arg1.ToNumber(), arg2.ToNumber()
 	if num1.Type != ArgNumber || num2.Type != ArgNumber {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
@@ -8357,14 +8379,22 @@ func (fn *formulaFuncs) CHIINV(argsList *list.List) formulaArg {
 	if argsList.Len() != 2 {
 		return newErrorFormulaArg(formulaErrorVALUE, "CHIINV requires 2 numeric arguments")
 	}
-	probability := argsList.Front().Value.(formulaArg).ToNumber()
+	probArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(probArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	probability := probArg.ToNumber()
 	if probability.Type != ArgNumber {
 		return probability
 	}
 	if probability.Number <= 0 || probability.Number > 1 {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
-	deg := argsList.Back().Value.(formulaArg).ToNumber()
+	degArg := argsList.Back().Value.(formulaArg)
+	if isLiteralEmptyString(degArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	deg := degArg.ToNumber()
 	if deg.Type != ArgNumber {
 		return deg
 	}
@@ -10642,6 +10672,9 @@ func (fn *formulaFuncs) HARMEAN(argsList *list.List) formulaArg {
 		arg := token.Value.(formulaArg)
 		switch arg.Type {
 		case ArgString:
+			if isLiteralEmptyString(arg) {
+				return newEmptyStringNumberErrorArg()
+			}
 			num := arg.ToNumber()
 			if num.Type != ArgNumber {
 				continue
@@ -11307,9 +11340,46 @@ func (fn *formulaFuncs) NEGBINOMdotDIST(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 	}
 	if cumulative.Number == 1 {
+		if fInt, ok := toWholeNumber(f.Number); ok && fInt >= 0 && fInt <= negBinomCDFMaxIter {
+			if sInt, ok := toWholeNumber(s.Number); ok && sInt > 0 {
+				return newNumberFormulaArg(negativeBinomCDF(fInt, sInt, probability.Number))
+			}
+		}
 		return newNumberFormulaArg(1 - getBetaDist(1-probability.Number, f.Number+1, s.Number))
 	}
 	return newNumberFormulaArg(binomCoeff(f.Number+s.Number-1, s.Number-1) * math.Pow(probability.Number, s.Number) * math.Pow(1-probability.Number, f.Number))
+}
+
+func toWholeNumber(val float64) (int64, bool) {
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, false
+	}
+	rounded := math.Round(val)
+	if math.Abs(val-rounded) > nearIntegerTolerance {
+		return 0, false
+	}
+	if rounded < math.MinInt64 || rounded > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(rounded), true
+}
+
+func negativeBinomCDF(fCount, sCount int64, probability float64) float64 {
+	if sCount <= 0 {
+		return 0
+	}
+	q := 1 - probability
+	term := math.Pow(probability, float64(sCount))
+	sum := term
+	for k := int64(1); k <= fCount; k++ {
+		multiplier := (float64(sCount) + float64(k) - 1) / float64(k)
+		term *= multiplier * q
+		sum += term
+		if sum >= 1 {
+			return 1
+		}
+	}
+	return sum
 }
 
 // NEGBINOMDIST function calculates the Negative Binomial Distribution for a
@@ -11360,13 +11430,25 @@ func (fn *formulaFuncs) NORMDIST(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorVALUE, "NORMDIST requires 4 arguments")
 	}
 	var x, mean, stdDev, cumulative formulaArg
-	if x = argsList.Front().Value.(formulaArg).ToNumber(); x.Type != ArgNumber {
+	xArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(xArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	if x = xArg.ToNumber(); x.Type != ArgNumber {
 		return x
 	}
-	if mean = argsList.Front().Next().Value.(formulaArg).ToNumber(); mean.Type != ArgNumber {
+	meanArg := argsList.Front().Next().Value.(formulaArg)
+	if isLiteralEmptyString(meanArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	if mean = meanArg.ToNumber(); mean.Type != ArgNumber {
 		return mean
 	}
-	if stdDev = argsList.Back().Prev().Value.(formulaArg).ToNumber(); stdDev.Type != ArgNumber {
+	stdDevArg := argsList.Back().Prev().Value.(formulaArg)
+	if isLiteralEmptyString(stdDevArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	if stdDev = stdDevArg.ToNumber(); stdDev.Type != ArgNumber {
 		return stdDev
 	}
 	if cumulative = argsList.Back().Value.(formulaArg).ToBool(); cumulative.Type == ArgError {
@@ -12579,10 +12661,18 @@ func (fn *formulaFuncs) TdotINVdot2T(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorVALUE, "T.INV.2T requires 2 arguments")
 	}
 	var probability, degrees formulaArg
-	if probability = argsList.Front().Value.(formulaArg).ToNumber(); probability.Type != ArgNumber {
+	probArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(probArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	if probability = probArg.ToNumber(); probability.Type != ArgNumber {
 		return probability
 	}
-	if degrees = argsList.Back().Value.(formulaArg).ToNumber(); degrees.Type != ArgNumber {
+	degArg := argsList.Back().Value.(formulaArg)
+	if isLiteralEmptyString(degArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	if degrees = degArg.ToNumber(); degrees.Type != ArgNumber {
 		return degrees
 	}
 	if probability.Number <= 0 || probability.Number > 1 || degrees.Number < 1 {
@@ -14121,6 +14211,9 @@ func (fn *formulaFuncs) EDATE(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorVALUE, "EDATE requires 2 arguments")
 	}
 	date := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(date) {
+		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	}
 	num := date.ToNumber()
 	var dateTime time.Time
 	if num.Type != ArgNumber {
@@ -14141,20 +14234,24 @@ func (fn *formulaFuncs) EDATE(argsList *list.List) formulaArg {
 		}
 		dateTime = timeFromExcelTime(num.Number, false)
 	}
-	month := argsList.Back().Value.(formulaArg).ToNumber()
+	monthArg := argsList.Back().Value.(formulaArg)
+	if isLiteralEmptyString(monthArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	month := monthArg.ToNumber()
 	if month.Type != ArgNumber {
 		return month
 	}
 	y, d := dateTime.Year(), dateTime.Day()
 	m := int(dateTime.Month()) + int(month.Number)
-	if month.Number < 0 {
-		y -= int(math.Ceil(-1 * float64(m) / 12))
-	}
-	if month.Number > 11 {
-		y += int(math.Floor(float64(m) / 12))
-	}
-	if m = m % 12; m <= 0 {
+	// Adjust year based on month overflow/underflow
+	for m < 1 {
+		y--
 		m += 12
+	}
+	for m > 12 {
+		y++
+		m -= 12
 	}
 	if d > 28 {
 		if days := getDaysInMonth(y, m); d > days {
@@ -14363,6 +14460,9 @@ func prepareWorkday(weekend formulaArg) ([]byte, int) {
 // toExcelDateArg function converts a text representation of a time, into an
 // Excel date time number formula argument.
 func toExcelDateArg(arg formulaArg) formulaArg {
+	if isLiteralEmptyString(arg) {
+		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	}
 	num := arg.ToNumber()
 	if num.Type != ArgNumber {
 		dateString := strings.ToLower(arg.Value())
@@ -14553,7 +14653,11 @@ func (fn *formulaFuncs) WORKDAYdotINTL(argsList *list.List) formulaArg {
 	if startDate.Type != ArgNumber {
 		return startDate
 	}
-	days := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	daysArg := argsList.Front().Next().Value.(formulaArg)
+	if isLiteralEmptyString(daysArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	days := daysArg.ToNumber()
 	if days.Type != ArgNumber {
 		return days
 	}
@@ -14761,7 +14865,11 @@ func (fn *formulaFuncs) YEARFRAC(argsList *list.List) formulaArg {
 	start, end := args.List[0], args.List[1]
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 3 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return basis
 		}
 	}
@@ -17702,13 +17810,21 @@ func (fn *formulaFuncs) INDEX(argsList *list.List) formulaArg {
 		array = newMatrixFormulaArg([][]formulaArg{{array}})
 	}
 
-	rowArg := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	rowArgVal := argsList.Front().Next().Value.(formulaArg)
+	if isLiteralEmptyString(rowArgVal) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rowArg := rowArgVal.ToNumber()
 	if rowArg.Type != ArgNumber {
 		return rowArg
 	}
 	rowIdx, colIdx := int(rowArg.Number)-1, -1
 	if argsList.Len() == 3 {
-		colArg := argsList.Back().Value.(formulaArg).ToNumber()
+		colArgVal := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(colArgVal) {
+			return newEmptyStringNumberErrorArg()
+		}
+		colArg := colArgVal.ToNumber()
 		if colArg.Type != ArgNumber {
 			return colArg
 		}
@@ -18414,7 +18530,11 @@ func (fn *formulaFuncs) ACCRINTM(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -18467,7 +18587,11 @@ func (fn *formulaFuncs) prepareAmorArgs(name string, argsList *list.List) formul
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 7 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -18571,7 +18695,11 @@ func (fn *formulaFuncs) prepareCouponArgs(name string, argsList *list.List) form
 	if settlement.Number >= maturity.Number {
 		return newErrorFormulaArg(formulaErrorNUM, fmt.Sprintf("%s requires maturity > settlement", name))
 	}
-	frequency := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	frequencyArg := argsList.Front().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(frequencyArg) {
+		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	}
+	frequency := frequencyArg.ToNumber()
 	if frequency.Type != ArgNumber {
 		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 	}
@@ -18580,7 +18708,11 @@ func (fn *formulaFuncs) prepareCouponArgs(name string, argsList *list.List) form
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 4 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -18964,6 +19096,9 @@ func (fn *formulaFuncs) prepareDataValueArgs(n int, argsList *list.List) formula
 		case ArgNumber:
 			break
 		case ArgString:
+			if isLiteralEmptyString(arg) {
+				return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+			}
 			num := arg.ToNumber()
 			if num.Type == ArgNumber {
 				arg = num
@@ -19023,7 +19158,11 @@ func (fn *formulaFuncs) discIntrate(name string, argsList *list.List) formulaArg
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -19175,7 +19314,11 @@ func (fn *formulaFuncs) prepareDurationArgs(name string, argsList *list.List) fo
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 6 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -19444,30 +19587,54 @@ func (fn *formulaFuncs) ipmt(name string, argsList *list.List) formulaArg {
 	if argsList.Len() > 6 {
 		return newErrorFormulaArg(formulaErrorVALUE, fmt.Sprintf("%s allows at most 6 arguments", name))
 	}
-	rate := argsList.Front().Value.(formulaArg).ToNumber()
+	rateArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(rateArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rate := rateArg.ToNumber()
 	if rate.Type != ArgNumber {
 		return rate
 	}
-	per := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	perArg := argsList.Front().Next().Value.(formulaArg)
+	if isLiteralEmptyString(perArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	per := perArg.ToNumber()
 	if per.Type != ArgNumber {
 		return per
 	}
-	nper := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	nperArg := argsList.Front().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(nperArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	nper := nperArg.ToNumber()
 	if nper.Type != ArgNumber {
 		return nper
 	}
-	pv := argsList.Front().Next().Next().Next().Value.(formulaArg).ToNumber()
+	pvArg := argsList.Front().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(pvArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	pv := pvArg.ToNumber()
 	if pv.Type != ArgNumber {
 		return pv
 	}
 	fv, typ := newNumberFormulaArg(0), newNumberFormulaArg(0)
 	if argsList.Len() >= 5 {
-		if fv = argsList.Front().Next().Next().Next().Next().Value.(formulaArg).ToNumber(); fv.Type != ArgNumber {
+		fvArg := argsList.Front().Next().Next().Next().Next().Value.(formulaArg)
+		if isLiteralEmptyString(fvArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if fv = fvArg.ToNumber(); fv.Type != ArgNumber {
 			return fv
 		}
 	}
 	if argsList.Len() == 6 {
-		if typ = argsList.Back().Value.(formulaArg).ToNumber(); typ.Type != ArgNumber {
+		typArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(typArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if typ = typArg.ToNumber(); typ.Type != ArgNumber {
 			return typ
 		}
 	}
@@ -19501,7 +19668,11 @@ func (fn *formulaFuncs) IRR(argsList *list.List) formulaArg {
 	}
 	values, guess := argsList.Front().Value.(formulaArg).ToList(), newNumberFormulaArg(0.1)
 	if argsList.Len() > 1 {
-		if guess = argsList.Back().Value.(formulaArg).ToNumber(); guess.Type != ArgNumber {
+		guessArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(guessArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if guess = guessArg.ToNumber(); guess.Type != ArgNumber {
 			return guess
 		}
 	}
@@ -19722,13 +19893,21 @@ func (fn *formulaFuncs) NPV(argsList *list.List) formulaArg {
 	if argsList.Len() < 2 {
 		return newErrorFormulaArg(formulaErrorVALUE, "NPV requires at least 2 arguments")
 	}
-	rate := argsList.Front().Value.(formulaArg).ToNumber()
+	rateArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(rateArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rate := rateArg.ToNumber()
 	if rate.Type != ArgNumber {
 		return rate
 	}
 	val, i := 0.0, 1
 	for arg := argsList.Front().Next(); arg != nil; arg = arg.Next() {
-		num := arg.Value.(formulaArg).ToNumber()
+		numArg := arg.Value.(formulaArg)
+		if isLiteralEmptyString(numArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		num := numArg.ToNumber()
 		if num.Type != ArgNumber {
 			continue
 		}
@@ -19827,6 +20006,9 @@ func coupNumber(maturity, settlement, numMonths float64) float64 {
 // prepareOddYldOrPrArg checking and prepare yield or price arguments for the
 // formula functions ODDFPRICE, ODDFYIELD, ODDLPRICE and ODDLYIELD.
 func prepareOddYldOrPrArg(name string, arg formulaArg) formulaArg {
+	if isLiteralEmptyString(arg) {
+		return newEmptyStringNumberErrorArg()
+	}
 	yldOrPr := arg.ToNumber()
 	if yldOrPr.Type != ArgNumber {
 		return yldOrPr
@@ -19857,7 +20039,11 @@ func (fn *formulaFuncs) prepareOddfArgs(name string, argsList *list.List) formul
 	if firstCoupon.Number >= maturity.Number {
 		return newErrorFormulaArg(formulaErrorNUM, fmt.Sprintf("%s requires maturity > first_coupon", name))
 	}
-	rate := argsList.Front().Next().Next().Next().Next().Value.(formulaArg).ToNumber()
+	rateArg := argsList.Front().Next().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(rateArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rate := rateArg.ToNumber()
 	if rate.Type != ArgNumber {
 		return rate
 	}
@@ -19868,14 +20054,22 @@ func (fn *formulaFuncs) prepareOddfArgs(name string, argsList *list.List) formul
 	if yldOrPr.Type != ArgNumber {
 		return yldOrPr
 	}
-	redemption := argsList.Front().Next().Next().Next().Next().Next().Next().Value.(formulaArg).ToNumber()
+	redemptionArg := argsList.Front().Next().Next().Next().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(redemptionArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	redemption := redemptionArg.ToNumber()
 	if redemption.Type != ArgNumber {
 		return redemption
 	}
 	if redemption.Number <= 0 {
 		return newErrorFormulaArg(formulaErrorNUM, fmt.Sprintf("%s requires redemption > 0", name))
 	}
-	frequency := argsList.Front().Next().Next().Next().Next().Next().Next().Next().Value.(formulaArg).ToNumber()
+	frequencyArg := argsList.Front().Next().Next().Next().Next().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(frequencyArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	frequency := frequencyArg.ToNumber()
 	if frequency.Type != ArgNumber {
 		return frequency
 	}
@@ -19884,7 +20078,11 @@ func (fn *formulaFuncs) prepareOddfArgs(name string, argsList *list.List) formul
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 9 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -20118,7 +20316,11 @@ func (fn *formulaFuncs) prepareOddlArgs(name string, argsList *list.List) formul
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 8 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -20375,16 +20577,36 @@ func (fn *formulaFuncs) priceYield(name string, argsList *list.List) formulaArg 
 		return args
 	}
 	settlement, maturity := args.List[0], args.List[1]
-	rate := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
-	prYld := argsList.Front().Next().Next().Next().Value.(formulaArg).ToNumber()
-	redemption := argsList.Front().Next().Next().Next().Next().Value.(formulaArg).ToNumber()
-	frequency := argsList.Front().Next().Next().Next().Next().Next().Value.(formulaArg).ToNumber()
+	rateArg := argsList.Front().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(rateArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rate := rateArg.ToNumber()
+	prYldArg := argsList.Front().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(prYldArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	prYld := prYldArg.ToNumber()
+	redemptionArg := argsList.Front().Next().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(redemptionArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	redemption := redemptionArg.ToNumber()
+	frequencyArg := argsList.Front().Next().Next().Next().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(frequencyArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	frequency := frequencyArg.ToNumber()
 	if arg := checkPriceYieldArgs(name, rate, prYld, redemption, frequency); arg.Type != ArgEmpty {
 		return arg
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 7 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -20434,7 +20656,11 @@ func (fn *formulaFuncs) PRICEDISC(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -20480,7 +20706,11 @@ func (fn *formulaFuncs) PRICEMAT(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 6 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -20504,27 +20734,47 @@ func (fn *formulaFuncs) PV(argsList *list.List) formulaArg {
 	if argsList.Len() > 5 {
 		return newErrorFormulaArg(formulaErrorVALUE, "PV allows at most 5 arguments")
 	}
-	rate := argsList.Front().Value.(formulaArg).ToNumber()
+	rateArg := argsList.Front().Value.(formulaArg)
+	if isLiteralEmptyString(rateArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	rate := rateArg.ToNumber()
 	if rate.Type != ArgNumber {
 		return rate
 	}
-	nper := argsList.Front().Next().Value.(formulaArg).ToNumber()
+	nperArg := argsList.Front().Next().Value.(formulaArg)
+	if isLiteralEmptyString(nperArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	nper := nperArg.ToNumber()
 	if nper.Type != ArgNumber {
 		return nper
 	}
-	pmt := argsList.Front().Next().Next().Value.(formulaArg).ToNumber()
+	pmtArg := argsList.Front().Next().Next().Value.(formulaArg)
+	if isLiteralEmptyString(pmtArg) {
+		return newEmptyStringNumberErrorArg()
+	}
+	pmt := pmtArg.ToNumber()
 	if pmt.Type != ArgNumber {
 		return pmt
 	}
 	fv := newNumberFormulaArg(0)
 	if argsList.Len() >= 4 {
-		if fv = argsList.Front().Next().Next().Next().Value.(formulaArg).ToNumber(); fv.Type != ArgNumber {
+		fvArg := argsList.Front().Next().Next().Next().Value.(formulaArg)
+		if isLiteralEmptyString(fvArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if fv = fvArg.ToNumber(); fv.Type != ArgNumber {
 			return fv
 		}
 	}
 	t := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if t = argsList.Back().Value.(formulaArg).ToNumber(); t.Type != ArgNumber {
+		typeArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(typeArg) {
+			return newEmptyStringNumberErrorArg()
+		}
+		if t = typeArg.ToNumber(); t.Type != ArgNumber {
 			return t
 		}
 		if t.Number != 0 {
@@ -20637,7 +20887,11 @@ func (fn *formulaFuncs) RECEIVED(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -21155,7 +21409,11 @@ func (fn *formulaFuncs) YIELDDISC(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 5 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}
@@ -21207,7 +21465,11 @@ func (fn *formulaFuncs) YIELDMAT(argsList *list.List) formulaArg {
 	}
 	basis := newNumberFormulaArg(0)
 	if argsList.Len() == 6 {
-		if basis = argsList.Back().Value.(formulaArg).ToNumber(); basis.Type != ArgNumber {
+		basisArg := argsList.Back().Value.(formulaArg)
+		if isLiteralEmptyString(basisArg) {
+			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
+		}
+		if basis = basisArg.ToNumber(); basis.Type != ArgNumber {
 			return newErrorFormulaArg(formulaErrorNUM, formulaErrorNUM)
 		}
 	}

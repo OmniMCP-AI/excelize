@@ -37,8 +37,21 @@ jobs:
         GOARCH=arm64 go build .
         GOARCH=arm64 GOOS=android go build .
 
-    - name: Test
-      run: env GO111MODULE=on go test -v -timeout 60m -race ./... -coverprofile='coverage.txt' -covermode=atomic
+    - name: Unit tests (-short, coverage)
+      shell: bash
+      env:
+        GOCACHE: ${{ runner.temp }}/go-build
+      run: |
+        set -euo pipefail
+        pkgs=$(go list ./... | grep -v 'github.com/xuri/excelize/v2/tests/manual/tools')
+        env GO111MODULE=on go test -short ${pkgs} -coverprofile='coverage.txt' -covermode=atomic
+
+    - name: Race tests
+      shell: bash
+      run: |
+        set -euo pipefail
+        pkgs=$(go list ./... | grep -v 'github.com/xuri/excelize/v2/tests/manual/tools')
+        env GO111MODULE=on go test -v -timeout 60m -race ${pkgs}
 
     - name: Codecov
       uses: codecov/codecov-action@v5

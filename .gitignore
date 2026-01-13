@@ -1,5 +1,7 @@
 .DS_Store
 .idea
+.gocache/
+.gomodcache/
 *.json
 *.out
 *.test
@@ -14,5 +16,4 @@ test/Test*.xlsx
 test/Test*.xltm
 test/Test*.xltx
 docs
-tests
 temp

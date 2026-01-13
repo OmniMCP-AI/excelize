@@ -1488,13 +1488,40 @@ func (ws *xlsxWorksheet) prepareCell(cell string) (*xlsxC, int, int, error) {
 	}
 
 	ws.prepareSheetXML(col, row)
-	// Bounds check to prevent panic in concurrent scenarios
-	if row < 1 || row > len(ws.SheetData.Row) {
+
+	// Bounds check to prevent panic in concurrent scenarios. If the sheet was
+	// modified concurrently between prepareSheetXML and here (e.g. trimRow),
+	// re-expand rows/columns on-demand instead of panicking.
+	if row < 1 {
 		return nil, 0, 0, newCellNameToCoordinatesError(cell, newInvalidCellNameError(cell))
 	}
+	if row > len(ws.SheetData.Row) {
+		sizeHint := 0
+		rowCount := len(ws.SheetData.Row)
+		if rowCount > 0 {
+			sizeHint = len(ws.SheetData.Row[rowCount-1].C)
+		}
+		var ht *float64
+		var customHeight bool
+		if ws.SheetFormatPr != nil && ws.SheetFormatPr.CustomHeight {
+			ht = float64Ptr(ws.SheetFormatPr.DefaultRowHeight)
+			customHeight = true
+		}
+		for rowIdx := rowCount; rowIdx < row; rowIdx++ {
+			ws.SheetData.Row = append(ws.SheetData.Row, xlsxRow{
+				R:            rowIdx + 1,
+				CustomHeight: customHeight,
+				Ht:           ht,
+				C:            make([]xlsxC, 0, sizeHint),
+			})
+		}
+	}
 	rowData := &ws.SheetData.Row[row-1]
-	if col < 1 || col > len(rowData.C) {
+	if col < 1 {
 		return nil, 0, 0, newCellNameToCoordinatesError(cell, newInvalidCellNameError(cell))
+	}
+	if col > len(rowData.C) {
+		fillColumns(rowData, col, row)
 	}
 	return &rowData.C[col-1], col, row, err
 }
