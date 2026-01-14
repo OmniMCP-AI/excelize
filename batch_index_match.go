@@ -120,7 +120,6 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 	// Calculate AVERAGE+INDEX-MATCH patterns
 	for _, pattern := range patternsAvg {
 		patternResults := f.calculateAverageIndexMatchPattern(pattern)
-		log.Printf("    ✅ [AVERAGE+INDEX-MATCH] Pattern calculated %d results", len(patternResults))
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -129,7 +128,6 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 	// Calculate 1D patterns
 	for _, pattern := range patterns1D {
 		patternResults := f.calculateINDEXMATCH1DPattern(pattern)
-		log.Printf("    ✅ [INDEX-MATCH 1D] Pattern calculated %d results", len(patternResults))
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -138,7 +136,6 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 	// Calculate 2D patterns
 	for _, pattern := range patterns2D {
 		patternResults := f.calculateINDEXMATCH2DPattern(pattern)
-		log.Printf("    ✅ [INDEX-MATCH 2D] Pattern calculated %d results", len(patternResults))
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -178,7 +175,6 @@ func (f *File) extractINDEXMATCH2DPattern(sheet, cell, formula string) *indexMat
 	// Extract the full INDEX expression
 	indexExpr := extractFunctionCall(workFormula[indexStart:], "INDEX")
 	if indexExpr == "" {
-		log.Printf("    ⚠️ [INDEX-MATCH] Failed to extract INDEX expression from: %s", formula[:minInt(100, len(formula))])
 		return nil
 	}
 
@@ -800,7 +796,116 @@ func (f *File) extractAverageIndexMatchPattern(sheet, cell, formula string) *ave
 	return pattern
 }
 
-// calculateAverageIndexMatchPattern calculates AVERAGE(INDEX(...)) batch
+// calculateAverageIndexMatchPatternWithCache calculates AVERAGE(INDEX(...)) batch using worksheetCache
+// This function reads data from worksheetCache for recalculated values, falling back to file for original data
+func (f *File) calculateAverageIndexMatchPatternWithCache(pattern *averageIndexMatchPattern, worksheetCache *WorksheetCache) map[string]string {
+	results := make(map[string]string)
+
+	// Extract source sheet from array range
+	sourceSheet := extractSheetName(pattern.arrayRange)
+	if sourceSheet == "" {
+		return results
+	}
+
+	// Parse array range to get column range (e.g., "$C:$O" -> C to O)
+	arrayParts := strings.Split(pattern.arrayRange, "!")
+	if len(arrayParts) != 2 {
+		return results
+	}
+
+	// Parse column range like "$C:$O"
+	rangePart := strings.ReplaceAll(arrayParts[1], "$", "")
+	rangeParts := strings.Split(rangePart, ":")
+	if len(rangeParts) != 2 {
+		return results
+	}
+
+	startCol := rangeParts[0]
+	endCol := rangeParts[1]
+	startColIdx, _ := ColumnNameToNumber(startCol)
+	endColIdx, _ := ColumnNameToNumber(endCol)
+
+	// Build lookup map from match range
+	matchCol := extractColumnFromRange(pattern.matchRange)
+	matchColIdx, _ := ColumnNameToNumber(matchCol)
+
+	// Read data: First read from file, then merge cached results
+	// This is critical: worksheetCache has recalculated formula results that override original data
+	fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil || len(fileRows) == 0 {
+		return results
+	}
+
+	// Merge cached formula results into rows
+	sheetData := worksheetCache.GetSheet(sourceSheet)
+	for cellRef, argValue := range sheetData {
+		col, row, err := CellNameToCoordinates(cellRef)
+		if err != nil {
+			continue
+		}
+		// Ensure fileRows array is large enough
+		for len(fileRows) < row {
+			fileRows = append(fileRows, make([]string, 0))
+		}
+		// Ensure row is large enough
+		for len(fileRows[row-1]) < col {
+			fileRows[row-1] = append(fileRows[row-1], "")
+		}
+		fileRows[row-1][col-1] = argValue.Value()
+	}
+
+	// Build lookup map: value -> row index (0-based)
+	lookupMap := make(map[string]int)
+	for rowIdx, row := range fileRows {
+		if matchColIdx-1 < len(row) {
+			value := row[matchColIdx-1]
+			if value != "" {
+				lookupMap[value] = rowIdx
+			}
+		}
+	}
+
+	// Calculate results for all formulas
+	for fullCell, info := range pattern.formulas {
+		// Get lookup value from worksheetCache or file
+		lookupCell := strings.ReplaceAll(info.lookupCell, "$", "")
+		lookupValue := f.getCellValueOrCalcCache(info.sheet, lookupCell, worksheetCache)
+
+		// Lookup in the map
+		if rowIdx, ok := lookupMap[lookupValue]; ok {
+			if rowIdx >= 0 && rowIdx < len(fileRows) {
+				// Calculate average of the row range (startColIdx to endColIdx, 1-based)
+				sum := 0.0
+				count := 0
+				for colIdx := startColIdx - 1; colIdx <= endColIdx-1 && colIdx < len(fileRows[rowIdx]); colIdx++ {
+					cellValue := fileRows[rowIdx][colIdx]
+					if cellValue != "" {
+						if val, err := strconv.ParseFloat(cellValue, 64); err == nil {
+							sum += val
+							count++
+						}
+						// Skip non-numeric values (text like "断货")
+					}
+				}
+
+				if count > 0 {
+					avg := sum / float64(count)
+					results[fullCell] = fmt.Sprintf("%g", avg)
+				} else {
+					results[fullCell] = "0"
+				}
+			} else {
+				results[fullCell] = "0"
+			}
+		} else {
+			results[fullCell] = "0"
+		}
+	}
+
+	return results
+}
+
+// calculateAverageIndexMatchPattern calculates AVERAGE(INDEX(...)) batch (legacy version without worksheetCache)
 func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPattern) map[string]string {
 	results := make(map[string]string)
 
@@ -832,120 +937,43 @@ func (f *File) calculateAverageIndexMatchPattern(pattern *averageIndexMatchPatte
 	matchCol := extractColumnFromRange(pattern.matchRange)
 	matchColIdx, _ := ColumnNameToNumber(matchCol)
 
-	log.Printf("    🔍 [AVERAGE+INDEX-MATCH] Pattern: %s, Match: %s, Formulas: %d",
-		pattern.arrayRange, pattern.matchRange, len(pattern.formulas))
-
-	// Use rangeCache to load data ranges efficiently
-	// Step 1: Read match column to build lookup map
-	matchRangeKey := fmt.Sprintf("%s!R1C%d:R1048576C%d", sourceSheet, matchColIdx, matchColIdx)
-
-	var matchValues []string
-	if cached, ok := f.rangeCache.Load(matchRangeKey); ok {
-		if matrix, ok := cached.(formulaArg); ok && matrix.Type == ArgMatrix {
-			matchValues = make([]string, len(matrix.Matrix))
-			for i, row := range matrix.Matrix {
-				if len(row) > 0 {
-					matchValues[i] = row[0].String
-				}
-			}
-		}
-	} else {
-		// Fallback: read using GetRows
-		rows, err := f.GetRows(sourceSheet)
-		if err != nil || len(rows) == 0 {
-			return results
-		}
-		matchValues = make([]string, len(rows))
-		matchMatrix := make([][]formulaArg, len(rows))
-		for i, row := range rows {
-			if matchColIdx-1 < len(row) {
-				matchValues[i] = row[matchColIdx-1]
-			}
-			// Build matrix for caching
-			matchMatrix[i] = []formulaArg{newStringFormulaArg(matchValues[i])}
-		}
-
-		// Cache the match column for future use
-		cacheValue := formulaArg{
-			Type:   ArgMatrix,
-			Matrix: matchMatrix,
-		}
-		f.rangeCache.Store(matchRangeKey, cacheValue)
+	// Read data using GetRows (legacy method)
+	rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil || len(rows) == 0 {
+		return results
 	}
 
-	// Build lookup map: value -> row index (1-based)
+	// Build lookup map: value -> row index (0-based)
 	lookupMap := make(map[string]int)
-	for rowIdx, value := range matchValues {
-		if value != "" {
-			lookupMap[value] = rowIdx + 1 // Store 1-based row number
-		}
-	}
-
-	// Step 2: Preload the data range columns (use cache)
-	dataRangeKey := fmt.Sprintf("%s!R1C%d:R1048576C%d", sourceSheet, startColIdx, endColIdx)
-
-	var dataMatrix [][]formulaArg
-	if cached, ok := f.rangeCache.Load(dataRangeKey); ok {
-		if matrix, ok := cached.(formulaArg); ok && matrix.Type == ArgMatrix {
-			dataMatrix = matrix.Matrix
-		}
-	} else {
-		// Read and cache the data range
-		rows, err := f.GetRows(sourceSheet)
-		if err != nil || len(rows) == 0 {
-			return results
-		}
-
-		// Convert to matrix
-		dataMatrix = make([][]formulaArg, len(rows))
-		for rowIdx, row := range rows {
-			numCols := endColIdx - startColIdx + 1
-			dataMatrix[rowIdx] = make([]formulaArg, numCols)
-			for colOffset := 0; colOffset < numCols; colOffset++ {
-				actualColIdx := startColIdx - 1 + colOffset
-				if actualColIdx < len(row) {
-					dataMatrix[rowIdx][colOffset] = newStringFormulaArg(row[actualColIdx])
-				} else {
-					dataMatrix[rowIdx][colOffset] = newEmptyFormulaArg()
-				}
+	for rowIdx, row := range rows {
+		if matchColIdx-1 < len(row) {
+			value := row[matchColIdx-1]
+			if value != "" {
+				lookupMap[value] = rowIdx
 			}
 		}
-
-		// Store in cache
-		cacheValue := formulaArg{
-			Type:   ArgMatrix,
-			Matrix: dataMatrix,
-		}
-		f.rangeCache.Store(dataRangeKey, cacheValue)
-		log.Printf("    ✅ [AVERAGE+INDEX-MATCH] Cached data range: %s (%d rows × %d cols)",
-			dataRangeKey, len(dataMatrix), endColIdx-startColIdx+1)
 	}
 
-	// Step 3: Calculate results for all formulas
+	// Calculate results for all formulas
 	for fullCell, info := range pattern.formulas {
 		// Get lookup value
 		lookupCell := strings.ReplaceAll(info.lookupCell, "$", "")
 		lookupValue, _ := f.GetCellValue(info.sheet, lookupCell)
 
 		// Lookup in the map
-		if rowNum, ok := lookupMap[lookupValue]; ok {
-			rowIdx := rowNum - 1 // Convert to 0-based
-			if rowIdx >= 0 && rowIdx < len(dataMatrix) {
-				// Calculate average of the row range
+		if rowIdx, ok := lookupMap[lookupValue]; ok {
+			if rowIdx >= 0 && rowIdx < len(rows) {
+				// Calculate average of the row range (startColIdx to endColIdx, 1-based)
 				sum := 0.0
 				count := 0
-				for _, cellArg := range dataMatrix[rowIdx] {
-					if cellArg.Type == ArgString {
-						cellValue := cellArg.String
-						if cellValue != "" {
-							if val, err := strconv.ParseFloat(cellValue, 64); err == nil {
-								sum += val
-								count++
-							}
+				for colIdx := startColIdx - 1; colIdx <= endColIdx-1 && colIdx < len(rows[rowIdx]); colIdx++ {
+					cellValue := rows[rowIdx][colIdx]
+					if cellValue != "" {
+						if val, err := strconv.ParseFloat(cellValue, 64); err == nil {
+							sum += val
+							count++
 						}
-					} else if cellArg.Type == ArgNumber {
-						sum += cellArg.Number
-						count++
+						// Skip non-numeric values (text like "断货")
 					}
 				}
 
@@ -1068,13 +1096,12 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 		}
 	}
 
-	log.Printf("    🔍 [INDEX-MATCH] Found %d AVERAGE+INDEX-MATCH, %d 1D patterns, and %d 2D patterns from %d formulas",
-		len(patternsAvg), len(patterns1D), len(patterns2D), len(formulas))
+	log.Printf("    🔍 [INDEX-MATCH] Found %d AVERAGE+INDEX-MATCH, %d 1D, %d 2D patterns",
+		len(patternsAvg), len(patterns1D), len(patterns2D))
 
-	// Calculate AVERAGE+INDEX-MATCH patterns (already uses rangeCache, no change needed)
+	// Calculate AVERAGE+INDEX-MATCH patterns (use worksheetCache for recalculated values)
 	for _, pattern := range patternsAvg {
-		patternResults := f.calculateAverageIndexMatchPattern(pattern)
-		log.Printf("    ✅ [AVERAGE+INDEX-MATCH] Pattern calculated %d results", len(patternResults))
+		patternResults := f.calculateAverageIndexMatchPatternWithCache(pattern, worksheetCache)
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -1083,7 +1110,6 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 	// Calculate 1D patterns (use worksheetCache)
 	for _, pattern := range patterns1D {
 		patternResults := f.calculateINDEXMATCH1DPatternWithCache(pattern, worksheetCache)
-		log.Printf("    ✅ [INDEX-MATCH 1D] Pattern calculated %d results", len(patternResults))
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -1092,7 +1118,6 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 	// Calculate 2D patterns (use worksheetCache)
 	for _, pattern := range patterns2D {
 		patternResults := f.calculateINDEXMATCH2DPatternWithCache(pattern, worksheetCache)
-		log.Printf("    ✅ [INDEX-MATCH 2D] Pattern calculated %d results", len(patternResults))
 		for cell, value := range patternResults {
 			results[cell] = value
 		}
@@ -1127,16 +1152,60 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 	startCol := colParts[0]
 	endCol := colParts[1]
 
-	// Read data from worksheetCache instead of dataCache
+	// Read data: First try worksheetCache, then fallback to file + merge cached results
 	sheetData := worksheetCache.GetSheet(sourceSheet)
-
-	// Convert map[cellRef]value to [][]string format for compatibility
-	rows := f.convertCacheToRows(sheetData)
 
 	// Build lookup maps
 	matchCol1 := extractColumnFromRange(pattern.matchRange1)
 	matchCol1Idx, _ := ColumnNameToNumber(matchCol1)
 	matchCol1Idx--
+
+	// Check if worksheetCache has enough data (at least has match column data)
+	hasEnoughData := len(sheetData) > 0
+	if hasEnoughData {
+		matchColName, _ := ColumnNumberToName(matchCol1Idx + 1)
+		foundMatchCol := false
+		for cellRef := range sheetData {
+			col, _, err := CellNameToCoordinates(cellRef)
+			if err == nil && col == matchCol1Idx+1 {
+				foundMatchCol = true
+				break
+			}
+			if strings.HasPrefix(cellRef, matchColName) {
+				foundMatchCol = true
+				break
+			}
+		}
+		hasEnoughData = foundMatchCol
+	}
+
+	var rows [][]string
+	if hasEnoughData {
+		// Use cache data
+		rows = f.convertCacheToRows(sheetData)
+	} else {
+		// Fallback: Read from file directly
+		fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+		if err != nil || len(fileRows) == 0 {
+			return results
+		}
+		rows = fileRows
+
+		// Merge cached formula results into rows
+		for cellRef, argValue := range sheetData {
+			col, row, err := CellNameToCoordinates(cellRef)
+			if err != nil {
+				continue
+			}
+			for len(rows) < row {
+				rows = append(rows, make([]string, 0))
+			}
+			for len(rows[row-1]) < col {
+				rows[row-1] = append(rows[row-1], "")
+			}
+			rows[row-1][col-1] = argValue.Value()
+		}
+	}
 
 	rowLookupMap := make(map[string]int)
 	if matchCol1Idx >= 0 {
@@ -1280,41 +1349,61 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 	matchColIdx, _ := ColumnNameToNumber(matchCol)
 	matchColIdx--
 
-	// DEBUG: 打印日销售表相关的 pattern
-	if sourceSheet == "日库存" {
-		hasDebugCell := false
-		for fullCell := range pattern.formulas {
-			if strings.HasPrefix(fullCell, "日销售!") {
-				parts := strings.Split(fullCell, "!")
-				if len(parts) == 2 && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-					hasDebugCell = true
-					break
-				}
+	// Read data: First try worksheetCache, then fallback to file + merge cached results
+	sheetData := worksheetCache.GetSheet(sourceSheet)
+
+	// Check if worksheetCache has enough data (at least has match column data)
+	hasEnoughData := len(sheetData) > 0
+	if hasEnoughData {
+		// Check if we have match column data
+		matchColName, _ := ColumnNumberToName(matchColIdx + 1)
+		foundMatchCol := false
+		for cellRef := range sheetData {
+			col, _, err := CellNameToCoordinates(cellRef)
+			if err == nil && col == matchColIdx+1 {
+				foundMatchCol = true
+				break
+			}
+			// Also check by column name prefix
+			if strings.HasPrefix(cellRef, matchColName) {
+				foundMatchCol = true
+				break
 			}
 		}
-		if hasDebugCell {
-			log.Printf("🔍 [INDEX-MATCH 1D] Pattern: arrayRange=%s, matchRange=%s", pattern.arrayRange, pattern.matchRange)
-			log.Printf("   arrayColPart=%s, arrayColIdx=%d, matchCol=%s, matchColIdx=%d", arrayColPart, arrayColIdx, matchCol, matchColIdx)
-			log.Printf("   pattern包含 %d 个公式:", len(pattern.formulas))
-			count := 0
-			for fullCell, info := range pattern.formulas {
-				if strings.HasPrefix(fullCell, "日销售!") {
-					parts := strings.Split(fullCell, "!")
-					if len(parts) == 2 && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-						log.Printf("     - %s (lookupCell=%s, sheet=%s)", fullCell, info.lookupCell, info.sheet)
-						count++
-						if count >= 10 {
-							break
-						}
-					}
-				}
-			}
-		}
+		hasEnoughData = foundMatchCol
 	}
 
-	// Read data from worksheetCache
-	sheetData := worksheetCache.GetSheet(sourceSheet)
-	rows := f.convertCacheToRows(sheetData)
+	var rows [][]string
+	if hasEnoughData {
+		// Use cache data
+		rows = f.convertCacheToRows(sheetData)
+	} else {
+		// Fallback: Read from file directly
+		fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+		if err != nil || len(fileRows) == 0 {
+			return results
+		}
+		rows = fileRows
+
+		// Merge cached formula results into rows
+		// This is important: if worksheetCache has calculated values,
+		// we need to override the file's original values
+		for cellRef, argValue := range sheetData {
+			col, row, err := CellNameToCoordinates(cellRef)
+			if err != nil {
+				continue
+			}
+			// Ensure rows array is large enough
+			for len(rows) < row {
+				rows = append(rows, make([]string, 0))
+			}
+			// Ensure row is large enough
+			for len(rows[row-1]) < col {
+				rows[row-1] = append(rows[row-1], "")
+			}
+			rows[row-1][col-1] = argValue.Value()
+		}
+	}
 
 	// Build lookup map
 	lookupMap := make(map[string]int)
@@ -1334,29 +1423,14 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 		lookupCell := strings.ReplaceAll(info.lookupCell, "$", "")
 		lookupValue := f.getCellValueOrCalcCache(info.sheet, lookupCell, worksheetCache)
 
-		// DEBUG
-		debugCell := strings.HasPrefix(fullCell, "日销售!") && (strings.HasSuffix(fullCell, "!B2") || strings.HasSuffix(fullCell, "!C2") || strings.HasSuffix(fullCell, "!D2") || strings.HasSuffix(fullCell, "!E2"))
-		if debugCell {
-			log.Printf("🔍 [INDEX-MATCH 1D Calc] %s: lookupCell=%s (sheet=%s), lookupValue='%s'", fullCell, lookupCell, info.sheet, lookupValue)
-		}
-
 		if rowIdx, ok := lookupMap[lookupValue]; ok {
 			if rowIdx < len(rows) && arrayColIdx < len(rows[rowIdx]) {
 				results[fullCell] = rows[rowIdx][arrayColIdx]
-				if debugCell {
-					log.Printf("    ✅ Match found: rowIdx=%d, arrayColIdx=%d, result='%s'", rowIdx, arrayColIdx, results[fullCell])
-				}
 			} else {
 				results[fullCell] = ""
-				if debugCell {
-					log.Printf("    ⚠️ Out of bounds: rowIdx=%d, len(rows)=%d, arrayColIdx=%d", rowIdx, len(rows), arrayColIdx)
-				}
 			}
 		} else {
 			results[fullCell] = ""
-			if debugCell {
-				log.Printf("    ⚠️ No match found in lookupMap for value='%s'", lookupValue)
-			}
 		}
 	}
 

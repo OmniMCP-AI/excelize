@@ -20,21 +20,31 @@ type formulaNode struct {
 	level        int      // Dependency level (0 = no dependencies, 1 = depends on level 0, etc.)
 }
 
+// columnMeta stores metadata about a column to avoid unnecessary dependency expansion
+type columnMeta struct {
+	hasFormulas bool         // Whether this column contains any formulas
+	formulaRows map[int]bool // Set of row numbers that have formulas (nil if pure data column)
+	maxRow      int          // Maximum row number with data
+}
+
 // dependencyGraph represents the complete dependency graph of all formulas
 type dependencyGraph struct {
-	nodes  map[string]*formulaNode // cell -> node
-	levels [][]string              // level -> list of cells at that level
+	nodes          map[string]*formulaNode // cell -> node
+	levels         [][]string              // level -> list of cells at that level
+	columnMetadata map[string]*columnMeta  // "Sheet!Col" -> metadata for smart dependency resolution
 }
 
 // buildDependencyGraph analyzes all formulas and builds a dependency graph
+// Optimized: Uses column metadata to avoid expanding column ranges to individual cells
 func (f *File) buildDependencyGraph() *dependencyGraph {
 	startTime := time.Now()
 
 	graph := &dependencyGraph{
-		nodes: make(map[string]*formulaNode),
+		nodes:          make(map[string]*formulaNode),
+		columnMetadata: make(map[string]*columnMeta),
 	}
 
-	// Step 1: First pass - collect all formulas WITHOUT extracting dependencies
+	// Step 1: First pass - collect all formulas and build column metadata simultaneously
 	sheetList := f.GetSheetList()
 	formulasToProcess := make([]struct {
 		fullCell string
@@ -51,6 +61,29 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 
 		for _, row := range ws.SheetData.Row {
 			for _, cell := range row.C {
+				// Extract column and row info for metadata
+				col, rowNum, err := CellNameToCoordinates(cell.R)
+				if err != nil {
+					continue
+				}
+				colName, _ := ColumnNumberToName(col)
+				colKey := sheet + "!" + colName
+
+				// Initialize column metadata if not exists
+				if graph.columnMetadata[colKey] == nil {
+					graph.columnMetadata[colKey] = &columnMeta{
+						hasFormulas: false,
+						formulaRows: nil,
+						maxRow:      0,
+					}
+				}
+				meta := graph.columnMetadata[colKey]
+
+				// Update max row
+				if rowNum > meta.maxRow {
+					meta.maxRow = rowNum
+				}
+
 				if cell.F != nil {
 					formula := cell.F.Content
 					// Handle shared formulas
@@ -74,15 +107,33 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 							dependencies: nil,
 							level:        -1,
 						}
+
+						// Mark column as having formulas
+						meta.hasFormulas = true
+						if meta.formulaRows == nil {
+							meta.formulaRows = make(map[int]bool)
+						}
+						meta.formulaRows[rowNum] = true
 					}
 				}
 			}
 		}
 	}
 
-	log.Printf("  📊 [Dependency Analysis] Collected %d formulas", len(graph.nodes))
+	// Count columns with formulas vs pure data
+	formulaCols, dataCols := 0, 0
+	for _, meta := range graph.columnMetadata {
+		if meta.hasFormulas {
+			formulaCols++
+		} else {
+			dataCols++
+		}
+	}
 
-	// Step 1.5: Build column index for efficient column range expansion
+	log.Printf("  📊 [Dependency Analysis] Collected %d formulas, %d columns (%d with formulas, %d pure data)",
+		len(graph.nodes), len(graph.columnMetadata), formulaCols, dataCols)
+
+	// Step 2: Build column index for efficient column range expansion (only formula columns matter)
 	columnIndex := make(map[string][]string)
 	for cellRef := range graph.nodes {
 		parts := strings.Split(cellRef, "!")
@@ -107,17 +158,17 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 		}
 	}
 
-	log.Printf("  📊 [Dependency Analysis] Built column index: %d columns", len(columnIndex))
+	log.Printf("  📊 [Dependency Analysis] Built column index: %d columns with formulas", len(columnIndex))
 
-	// Step 2: Second pass - extract dependencies with column range expansion
+	// Step 3: Extract dependencies with smart column resolution
 	for _, info := range formulasToProcess {
-		deps := extractDependenciesWithColumnIndex(info.formula, info.sheet, info.cellRef, columnIndex)
+		deps := extractDependenciesOptimized(info.formula, info.sheet, info.cellRef, columnIndex, graph.columnMetadata)
 		graph.nodes[info.fullCell].dependencies = deps
 	}
 
 	log.Printf("  📊 [Dependency Analysis] Extracted dependencies")
 
-	// Step 2: Assign levels using topological sort
+	// Step 4: Assign levels using topological sort
 	graph.assignLevels()
 
 	duration := time.Since(startTime)
@@ -139,55 +190,128 @@ func minInt(a, b int) int {
 }
 
 // assignLevels assigns each node a level based on its dependencies
+// Optimized: Handles virtual column dependencies (COLUMN:Sheet!Col)
 func (g *dependencyGraph) assignLevels() {
+	// Build reverse mapping: column -> max level of formulas in that column
+	// This is used to resolve virtual column dependencies
+	columnMaxLevel := make(map[string]int) // "Sheet!Col" -> max level
+
+	// Pre-populate columnMaxLevel with -1 for all columns that have formulas
+	// This ensures virtual dependencies are properly tracked from the start
+	for cellRef := range g.nodes {
+		parts := strings.Split(cellRef, "!")
+		if len(parts) == 2 {
+			col := ""
+			for _, ch := range parts[1] {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					col += string(ch)
+				} else {
+					break
+				}
+			}
+			colKey := parts[0] + "!" + col
+			if _, exists := columnMaxLevel[colKey]; !exists {
+				columnMaxLevel[colKey] = -1 // Mark as "has formulas but not yet resolved"
+			}
+		}
+	}
+
+	// Helper function to check if a dependency is resolved
+	isDependencyResolved := func(dep string) (bool, int) {
+		if strings.HasPrefix(dep, "COLUMN:") {
+			// Virtual column dependency
+			colKey := strings.TrimPrefix(dep, "COLUMN:")
+			if level, exists := columnMaxLevel[colKey]; exists {
+				if level >= 0 {
+					return true, level // Column is fully resolved
+				}
+				// Column has formulas but not yet resolved
+				return false, -1
+			}
+			// Column not in our tracking - pure data column
+			return true, -1
+		}
+
+		// Regular cell dependency
+		if depNode, exists := g.nodes[dep]; exists {
+			if depNode.level >= 0 {
+				return true, depNode.level
+			}
+			return false, -1
+		}
+		// Not a formula cell, treat as resolved
+		return true, -1
+	}
+
 	// Find nodes with no dependencies (level 0)
-	level0 := make([]string, 0)
+	// IMPORTANT: 两阶段处理，避免遍历顺序导致的竞态问题
+	// 阶段1：收集所有没有未解决依赖的节点
+	level0Candidates := make([]string, 0)
 	for cell, node := range g.nodes {
 		hasDeps := false
 		for _, dep := range node.dependencies {
-			// Only count dependency if it's also a formula
-			if _, isFormula := g.nodes[dep]; isFormula {
+			resolved, _ := isDependencyResolved(dep)
+			if !resolved {
 				hasDeps = true
 				break
 			}
 		}
 
 		if !hasDeps {
-			node.level = 0
-			level0 = append(level0, cell)
+			level0Candidates = append(level0Candidates, cell)
 		}
+	}
+
+	// 阶段2：统一设置level，避免在遍历过程中level被修改
+	level0 := make([]string, 0)
+	for _, cell := range level0Candidates {
+		node := g.nodes[cell]
+		node.level = 0
+		level0 = append(level0, cell)
 	}
 
 	g.levels = append(g.levels, level0)
 
-	// Iteratively assign levels - continue until all nodes are assigned
-	maxIterations := len(g.nodes) // Prevent infinite loop
+	// Update column max levels for level 0
+	for _, cell := range level0 {
+		parts := strings.Split(cell, "!")
+		if len(parts) == 2 {
+			col := ""
+			for _, ch := range parts[1] {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					col += string(ch)
+				} else {
+					break
+				}
+			}
+			colKey := parts[0] + "!" + col
+			if columnMaxLevel[colKey] < 0 {
+				columnMaxLevel[colKey] = 0
+			}
+		}
+	}
+
+	// Iteratively assign levels
+	maxIterations := len(g.nodes)
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		anyAssigned := false
 
 		for cell, node := range g.nodes {
 			if node.level != -1 {
-				continue // Already assigned
+				continue
 			}
 
-			// Check if all dependencies are assigned
 			maxDepLevel := -1
 			allDepsAssigned := true
 
 			for _, dep := range node.dependencies {
-				depNode, exists := g.nodes[dep]
-				if !exists {
-					// Dependency is not a formula (data cell), ignore
-					continue
-				}
-
-				if depNode.level == -1 {
+				resolved, level := isDependencyResolved(dep)
+				if !resolved {
 					allDepsAssigned = false
 					break
 				}
-
-				if depNode.level > maxDepLevel {
-					maxDepLevel = depNode.level
+				if level > maxDepLevel {
+					maxDepLevel = level
 				}
 			}
 
@@ -195,22 +319,38 @@ func (g *dependencyGraph) assignLevels() {
 				targetLevel := maxDepLevel + 1
 				node.level = targetLevel
 
-				// Ensure we have enough levels
 				for len(g.levels) <= targetLevel {
 					g.levels = append(g.levels, make([]string, 0))
 				}
 
 				g.levels[targetLevel] = append(g.levels[targetLevel], cell)
 				anyAssigned = true
+
+				// Update column max level
+				parts := strings.Split(cell, "!")
+				if len(parts) == 2 {
+					col := ""
+					for _, ch := range parts[1] {
+						if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+							col += string(ch)
+						} else {
+							break
+						}
+					}
+					colKey := parts[0] + "!" + col
+					if targetLevel > columnMaxLevel[colKey] {
+						columnMaxLevel[colKey] = targetLevel
+					}
+				}
 			}
 		}
 
 		if !anyAssigned {
-			break // No more assignments possible
+			break
 		}
 	}
 
-	// Handle circular dependencies or unassigned nodes (assign to last level + 1)
+	// Handle circular dependencies
 	circularCells := make([]string, 0)
 	for cell, node := range g.nodes {
 		if node.level == -1 {
@@ -397,6 +537,135 @@ func extractDependencies(formula, currentSheet, currentCell string) []string {
 		result = append(result, dep)
 	}
 
+	return result
+}
+
+// extractDependenciesOptimized extracts dependencies with smart column resolution
+// Key optimization: Pure data columns (no formulas) are SKIPPED entirely - no dependency added
+// Formula columns only add a virtual column dependency marker, not individual cells
+func extractDependenciesOptimized(formula, currentSheet, currentCell string, columnIndex map[string][]string, columnMetadata map[string]*columnMeta) []string {
+	deps := make(map[string]bool)
+
+	ps := efp.ExcelParser()
+	tokens := ps.Parse(formula)
+	if tokens == nil {
+		return []string{}
+	}
+
+	for _, token := range tokens {
+		if token.TType != efp.TokenTypeOperand || token.TSubType != efp.TokenSubTypeRange {
+			continue
+		}
+
+		ref := token.TValue
+		var sheetName, cellPart string
+
+		if strings.Contains(ref, "!") {
+			parts := strings.SplitN(ref, "!", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			sheetName = strings.Trim(parts[0], "'")
+			cellPart = parts[1]
+		} else {
+			sheetName = currentSheet
+			cellPart = ref
+		}
+
+		if strings.Contains(cellPart, ":") {
+			rangeParts := strings.Split(cellPart, ":")
+			if len(rangeParts) != 2 {
+				continue
+			}
+
+			start := strings.ReplaceAll(rangeParts[0], "$", "")
+			end := strings.ReplaceAll(rangeParts[1], "$", "")
+
+			// Check if it's a column range (no row numbers)
+			isColumnRange := !strings.ContainsAny(start, "0123456789") &&
+				!strings.ContainsAny(end, "0123456789")
+
+			if isColumnRange {
+				// OPTIMIZATION: Check column metadata
+				// If column is pure data (no formulas), skip adding any dependency
+				startColKey := sheetName + "!" + strings.ToUpper(start)
+				endColKey := sheetName + "!" + strings.ToUpper(end)
+
+				startMeta := columnMetadata[startColKey]
+				endMeta := columnMetadata[endColKey]
+
+				// Only add dependency if column has formulas
+				if startMeta != nil && startMeta.hasFormulas {
+					// Add virtual column dependency instead of expanding to all cells
+					deps["COLUMN:"+startColKey] = true
+				}
+				if start != end && endMeta != nil && endMeta.hasFormulas {
+					deps["COLUMN:"+endColKey] = true
+				}
+				// If neither column has formulas, NO dependency is added - this is the key optimization
+			} else {
+				// Regular range like A1:B10 or K3:CV3
+				// For large ranges, only add formula cells within the range
+				startCol, startRow, err1 := CellNameToCoordinates(start)
+				endCol, endRow, err2 := CellNameToCoordinates(end)
+
+				if err1 != nil || err2 != nil {
+					// Fallback: just add endpoints
+					deps[sheetName+"!"+start] = true
+					deps[sheetName+"!"+end] = true
+					continue
+				}
+
+				// Ensure proper ordering
+				if startRow > endRow {
+					startRow, endRow = endRow, startRow
+				}
+				if startCol > endCol {
+					startCol, endCol = endCol, startCol
+				}
+
+				// For small ranges (<= 100 cells), expand normally
+				rangeSize := (endRow - startRow + 1) * (endCol - startCol + 1)
+				if rangeSize <= 100 {
+					for col := startCol; col <= endCol; col++ {
+						colName, _ := ColumnNumberToName(col)
+						key := sheetName + "!" + colName
+						if formulas, exists := columnIndex[key]; exists {
+							for _, formulaCell := range formulas {
+								parts := strings.Split(formulaCell, "!")
+								if len(parts) == 2 {
+									_, row, err := CellNameToCoordinates(parts[1])
+									if err == nil && row >= startRow && row <= endRow {
+										deps[formulaCell] = true
+									}
+								}
+							}
+						}
+					}
+				} else {
+					// For large ranges, only add virtual column dependencies for formula columns
+					for col := startCol; col <= endCol; col++ {
+						colName, _ := ColumnNumberToName(col)
+						colKey := sheetName + "!" + colName
+						if meta := columnMetadata[colKey]; meta != nil && meta.hasFormulas {
+							deps["COLUMN:"+colKey] = true
+						}
+					}
+				}
+			}
+		} else {
+			// Single cell reference
+			cleanCell := strings.ReplaceAll(cellPart, "$", "")
+			if cleanCell != "" {
+				deps[sheetName+"!"+cleanCell] = true
+			}
+		}
+	}
+
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
 	return result
 }
 
@@ -1062,17 +1331,14 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 	log.Printf("  🔧 Using %d workers (CPU cores: %d)", numWorkers, runtime.NumCPU())
 
 	// ========================================
-	// 关键优化：创建全局数据源缓存
+	// 关键优化：创建全局数据源缓存（懒加载模式）
 	// 所有层级的批量SUMIFS计算共享同一份数据源，避免重复读取
 	// ========================================
-	// 步骤3：初始化统一的 WorksheetCache
-	// ========================================
-	log.Printf("⚡ [Worksheet Cache] Pre-loading all sheets...")
+	log.Printf("⚡ [Worksheet Cache] Initializing lazy cache...")
 	cacheStart := time.Now()
 	worksheetCache := f.buildWorksheetCache(graph)
 	cacheDuration := time.Since(cacheStart)
-	log.Printf("✅ [Worksheet Cache] Loaded %d cells from %d sheets in %v",
-		worksheetCache.Len(), len(f.GetSheetList()), cacheDuration)
+	log.Printf("✅ [Worksheet Cache] Initialized in %v (lazy loading enabled)", cacheDuration)
 
 	// 全局进度跟踪
 	totalCompleted := int64(0)
@@ -1122,7 +1388,17 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		}
 
 		// ========================================
-		// 步骤2：为当前层批量优化 SUMIFS（使用共享数据缓存）
+		// 步骤2：先计算当前层的"简单公式"（非批量优化类型）
+		// 这些公式的结果会被后续的批量SUMIFS/INDEX-MATCH使用
+		// ========================================
+		log.Printf("  🔄 [Level %d] Pre-calculating simple formulas...", levelIdx)
+		preCalcStart := time.Now()
+		simpleFormulas := f.preCalculateSimpleFormulas(levelCells, graph, worksheetCache)
+		preCalcDuration := time.Since(preCalcStart)
+		log.Printf("  ✅ [Level %d] Pre-calculated %d simple formulas in %v", levelIdx, simpleFormulas, preCalcDuration)
+
+		// ========================================
+		// 步骤3：为当前层批量优化 SUMIFS（使用共享数据缓存）
 		// ========================================
 		log.Printf("  🔧 [Level %d] Starting batch optimization...", levelIdx)
 		batchOptStart := time.Now()
@@ -1167,23 +1443,24 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 	log.Printf("\n✅ [DAG Calculation] Completed all %d formulas", totalFormulas)
 }
 
-// buildWorksheetCache pre-loads all worksheets into a unified cache
-// This replaces dataSourceCache and provides a single source of truth for all cell values
+// buildWorksheetCache creates a worksheet cache with lazy loading
+// OPTIMIZATION: Does NOT pre-load entire sheets - only tracks which sheets might be needed
+// Actual data loading happens on-demand through PreloadColumnRange or individual cell reads
 func (f *File) buildWorksheetCache(graph *dependencyGraph) *WorksheetCache {
 	worksheetCache := NewWorksheetCache()
-	sheetsToLoad := make(map[string]bool)
+	sheetsToTrack := make(map[string]bool)
 
-	// 收集所有需要读取的数据源sheet
+	// Collect all sheets that might be referenced (for tracking, not loading)
 	for _, node := range graph.nodes {
 		formula := node.formula
 
-		// 添加公式所在的 sheet
+		// Add formula's own sheet
 		parts := strings.Split(node.cell, "!")
 		if len(parts) >= 2 {
-			sheetsToLoad[parts[0]] = true
+			sheetsToTrack[parts[0]] = true
 		}
 
-		// 检查是否包含 SUMIFS
+		// Check for SUMIFS/AVERAGEIFS
 		var sumifsExpr string
 		if expr := extractSUMIFSFromFormula(formula); expr != "" {
 			sumifsExpr = expr
@@ -1192,8 +1469,6 @@ func (f *File) buildWorksheetCache(graph *dependencyGraph) *WorksheetCache {
 		}
 
 		if sumifsExpr != "" {
-			// 提取数据源sheet名
-			// SUMIFS('源sheet'!$H:$H,'源sheet'!$E:$E,$E2,'源sheet'!$D:$D,$D2)
 			parts := strings.Split(sumifsExpr, "!")
 			if len(parts) >= 2 {
 				sheetName := strings.Trim(parts[0], "'")
@@ -1201,28 +1476,24 @@ func (f *File) buildWorksheetCache(graph *dependencyGraph) *WorksheetCache {
 				sheetName = strings.TrimPrefix(sheetName, "AVERAGEIFS(")
 				sheetName = strings.Trim(sheetName, "'")
 				if sheetName != "" {
-					sheetsToLoad[sheetName] = true
+					sheetsToTrack[sheetName] = true
 				}
 			}
 		}
 
-		// 检查是否包含 INDEX-MATCH (提取 INDEX 的数据源 sheet)
+		// Check for INDEX-MATCH
 		if strings.Contains(formula, "INDEX(") {
-			// 提取 INDEX 的第一个参数（数据源范围）
-			// 例如: INDEX(日销预测!$G:$ZZ, ...) 或 INDEX('日销预测'!$G:$ZZ, ...)
 			if idx := strings.Index(formula, "INDEX("); idx != -1 {
-				remaining := formula[idx+6:] // Skip "INDEX("
-				// 找到第一个逗号之前的内容
+				remaining := formula[idx+6:]
 				if commaIdx := strings.Index(remaining, ","); commaIdx != -1 {
 					rangeRef := remaining[:commaIdx]
-					// 提取 sheet 名
 					if strings.Contains(rangeRef, "!") {
 						parts := strings.Split(rangeRef, "!")
 						if len(parts) >= 2 {
 							sheetName := strings.Trim(parts[0], "'")
 							sheetName = strings.TrimSpace(sheetName)
 							if sheetName != "" {
-								sheetsToLoad[sheetName] = true
+								sheetsToTrack[sheetName] = true
 							}
 						}
 					}
@@ -1231,13 +1502,10 @@ func (f *File) buildWorksheetCache(graph *dependencyGraph) *WorksheetCache {
 		}
 	}
 
-	// 加载所有涉及的 sheets 到统一缓存
-	for sheetName := range sheetsToLoad {
-		err := worksheetCache.LoadSheet(f, sheetName)
-		if err == nil {
-			log.Printf("  📦 Cached sheet '%s': %d cells", sheetName, worksheetCache.SheetLen(sheetName))
-		}
-	}
+	log.Printf("  📦 [Worksheet Cache] Tracking %d sheets (lazy loading enabled)", len(sheetsToTrack))
+
+	// DO NOT pre-load sheets - let PreloadColumnRange and on-demand loading handle it
+	// This is the key optimization to prevent memory explosion
 
 	return worksheetCache
 }
@@ -1388,37 +1656,140 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 	}
 
 	// 批量计算所有唯一的 SUMIFS 表达式（供复合公式使用）
+	// 优化策略：
+	// 1. 按数据源范围分组（不是按完整表达式），这样不同行但相同数据源的公式可以共享 resultMap
+	// 2. 为每个数据源组合预先构建 resultMap
+	// 3. 每个公式使用自己正确的条件值从 resultMap 查询结果
 	if len(uniqueSUMIFSExprs) > 0 {
-		// 为每个唯一表达式创建一个临时单元格来批量计算
-		tempFormulas := make(map[string]string)
-		exprToTempCell := make(map[string]string)
+		// 按数据源范围分组：key = "sumRange|criteriaRange1|criteriaRange2"
+		type sumifsGroup struct {
+			sumRangeRef       string
+			criteriaRange1Ref string
+			criteriaRange2Ref string
+			formulas          map[string]struct { // cell -> criteria info
+				sheet         string
+				criteria1Cell string
+				criteria2Cell string
+			}
+		}
+		groups := make(map[string]*sumifsGroup)
 
 		for expr, cells := range uniqueSUMIFSExprs {
-			// 使用第一个引用这个表达式的单元格的 sheet
-			if len(cells) > 0 {
-				parts := strings.Split(cells[0], "!")
-				if len(parts) == 2 {
-					tempCell := fmt.Sprintf("%s!TEMP_SUBEXPR_%d", parts[0], len(tempFormulas))
-					tempFormulas[tempCell] = expr
-					exprToTempCell[expr] = tempCell
+			// 解析 SUMIFS 表达式
+			if !strings.HasPrefix(expr, "SUMIFS(") {
+				continue
+			}
+			inner := expr[7 : len(expr)-1]
+			parts := splitFormulaArgs(inner)
+			if len(parts) != 5 {
+				continue
+			}
+
+			sumRange := strings.TrimSpace(parts[0])
+			criteriaRange1 := strings.TrimSpace(parts[1])
+			criteria1Cell := strings.TrimSpace(parts[2])
+			criteriaRange2 := strings.TrimSpace(parts[3])
+			criteria2Cell := strings.TrimSpace(parts[4])
+
+			// 检查是否是支持的模式（外部范围引用 + 本地条件单元格）
+			if !strings.Contains(sumRange, "!") || !strings.Contains(criteriaRange1, "!") || !strings.Contains(criteriaRange2, "!") {
+				continue
+			}
+			if strings.Contains(criteria1Cell, "!") || strings.Contains(criteria2Cell, "!") {
+				continue
+			}
+
+			// 按数据源分组
+			groupKey := sumRange + "|" + criteriaRange1 + "|" + criteriaRange2
+			if groups[groupKey] == nil {
+				groups[groupKey] = &sumifsGroup{
+					sumRangeRef:       sumRange,
+					criteriaRange1Ref: criteriaRange1,
+					criteriaRange2Ref: criteriaRange2,
+					formulas: make(map[string]struct {
+						sheet         string
+						criteria1Cell string
+						criteria2Cell string
+					}),
+				}
+			}
+
+			// 添加每个使用这个表达式的单元格
+			for _, cell := range cells {
+				cellParts := strings.Split(cell, "!")
+				if len(cellParts) != 2 {
+					continue
+				}
+				groups[groupKey].formulas[cell] = struct {
+					sheet         string
+					criteria1Cell string
+					criteria2Cell string
+				}{
+					sheet:         cellParts[0],
+					criteria1Cell: criteria1Cell,
+					criteria2Cell: criteria2Cell,
 				}
 			}
 		}
 
-		// 批量计算这些子表达式（使用 worksheetCache）
-		if len(tempFormulas) >= 10 {
-			batchResults := f.batchCalculateSUMIFSWithCache(tempFormulas, worksheetCache)
-			log.Printf("  ⚡ [Level %d Batch] Calculated %d SUMIFS sub-expressions", levelIdx, len(batchResults))
+		log.Printf("  ⚡ [Level %d Batch SUMIFS] Found %d unique data source patterns for composite formulas", levelIdx, len(groups))
 
-			// 将子表达式结果存入 SubExpressionCache
-			for tempCell, value := range batchResults {
-				for expr, tc := range exprToTempCell {
-					if tc == tempCell {
-						subExprCache.Store(expr, value)
-						break
+		// 为每个数据源组合预先构建 resultMap 并计算结果
+		for groupKey, group := range groups {
+			if len(group.formulas) < 5 { // 至少5个公式才值得批量优化
+				continue
+			}
+
+			sourceSheet := extractSheetName(group.sumRangeRef)
+			if sourceSheet == "" {
+				continue
+			}
+
+			sumCol := extractColumnFromRange(group.sumRangeRef)
+			criteria1Col := extractColumnFromRange(group.criteriaRange1Ref)
+			criteria2Col := extractColumnFromRange(group.criteriaRange2Ref)
+
+			if sumCol == "" || criteria1Col == "" || criteria2Col == "" {
+				continue
+			}
+
+			// 获取数据源 - 直接从文件读取原始数据
+			// 注意：worksheetCache 只存储计算结果，不存储原始数据
+			// 所以这里必须从文件读取
+			rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+			if err != nil {
+				continue
+			}
+
+			// 构建 resultMap (只扫描一次)
+			resultMap := f.scanRowsAndBuildResultMap(sourceSheet, rows, sumCol, criteria1Col, criteria2Col)
+
+			// 为每个公式计算结果
+			calculatedCount := 0
+			for _, info := range group.formulas {
+				criteria1CellClean := strings.ReplaceAll(info.criteria1Cell, "$", "")
+				criteria2CellClean := strings.ReplaceAll(info.criteria2Cell, "$", "")
+
+				// 从正确的 sheet 读取条件值
+				c1 := f.getCellValueOrCalcCache(info.sheet, criteria1CellClean, worksheetCache)
+				c2 := f.getCellValueOrCalcCache(info.sheet, criteria2CellClean, worksheetCache)
+
+				var result float64 = 0
+				if resultMap[c1] != nil {
+					if val, ok := resultMap[c1][c2]; ok {
+						result = val
 					}
 				}
+
+				// 构造原始表达式 key 用于 subExprCache
+				exprKey := fmt.Sprintf("SUMIFS(%s,%s,%s,%s,%s)",
+					group.sumRangeRef, group.criteriaRange1Ref, info.criteria1Cell,
+					group.criteriaRange2Ref, info.criteria2Cell)
+				subExprCache.Store(exprKey, fmt.Sprintf("%.0f", result))
+				calculatedCount++
 			}
+
+			log.Printf("  ⚡ [Level %d Batch SUMIFS] Pattern %s: calculated %d formulas", levelIdx, groupKey[:min(40, len(groupKey))], calculatedCount)
 		}
 	}
 
@@ -1457,33 +1828,23 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 				}
 			}
 			cleanExpr := strings.TrimSpace(indexMatchExpr)
-
-			// 所有批量计算的 INDEX-MATCH 结果都存入 worksheetCache
-			// Phase 1: 需要将字符串转换为 formulaArg
 			parts := strings.Split(cell, "!")
-			if len(parts) == 2 {
-				cellType, _ := f.GetCellType(parts[0], parts[1])
-				arg := inferCellValueType(value, cellType)
-				worksheetCache.Set(parts[0], parts[1], arg)
-			}
 
+			// 只有纯 INDEX-MATCH 公式才存入 worksheetCache 和 calcCache
+			// 复合公式（如 IF(IFERROR(INDEX-MATCH...),0)=0,"断货",SUMIFS(...))）
+			// 只把 INDEX-MATCH 子表达式结果存入 subExprCache，让 DAG scheduler 重新计算完整公式
 			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {
-				// 纯 INDEX-MATCH - 同时存入 calcCache
+				// 纯 INDEX-MATCH - 存入 worksheetCache 和 calcCache
+				if len(parts) == 2 {
+					cellType, _ := f.GetCellType(parts[0], parts[1])
+					arg := inferCellValueType(value, cellType)
+					worksheetCache.Set(parts[0], parts[1], arg)
+				}
 				cacheKey := cell + "!raw=true"
 				f.calcCache.Store(cacheKey, value)
 				pureIndexMatchCount++
-
-				// DEBUG: 打印日销售表的批量 INDEX-MATCH 结果
-				if len(parts) == 2 && parts[0] == "日销售" && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-					log.Printf("💾 [INDEX-MATCH Store Pure] %s = '%s' (worksheetCache + calcCache)", cell, value)
-				}
-			} else {
-				// 复合公式 - 不存入 calcCache，但已存入 worksheetCache
-				// DEBUG
-				if len(parts) == 2 && (parts[0] == "日销售" || parts[0] == "日销预测") && (parts[1] == "B2" || parts[1] == "C2" || parts[1] == "D2" || parts[1] == "E2") {
-					log.Printf("💾 [INDEX-MATCH Store Composite] %s = '%s' (worksheetCache only, 复合公式)", cell, value)
-				}
 			}
+			// 复合公式 - 不存入 worksheetCache 和 calcCache，只存入 subExprCache（后面处理）
 		}
 		cacheStoreDuration := time.Since(cacheStoreStart)
 		log.Printf("  📊 [Level %d Batch] Stored %d pure INDEX-MATCH in calcCache (skipped %d composite)",
@@ -1505,15 +1866,6 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		for expr, cell := range exprToCell {
 			if value, ok := batchResults[cell]; ok {
 				subExprCache.Store(expr, value)
-
-				// DEBUG: 日销售 C3/D3
-				if strings.Contains(cell, "日销售!C3") || strings.Contains(cell, "日销售!D3") {
-					exprPreview := expr
-					if len(exprPreview) > 60 {
-						exprPreview = exprPreview[:60] + "..."
-					}
-					log.Printf("  🔍 [SubExpr Store] %s: expr='%s', value='%s'", cell, exprPreview, value)
-				}
 			}
 		}
 		exprToCellDuration := time.Since(exprToCellStart)
@@ -1696,4 +2048,98 @@ func parseCell(cellRef string) (int, int) {
 		return -1, -1
 	}
 	return row, col
+}
+
+// preCalculateSimpleFormulas 预先计算当前层中的"简单公式"
+// 简单公式是指非 SUMIFS/AVERAGEIFS/INDEX-MATCH 的公式，如 MAX, SUM, 算术运算等
+// 这些公式的结果会被后续的批量优化使用
+func (f *File) preCalculateSimpleFormulas(levelCells []string, graph *dependencyGraph, worksheetCache *WorksheetCache) int {
+	// 识别简单公式（非批量优化类型）
+	simpleFormulas := make([]string, 0)
+
+	for _, cell := range levelCells {
+		node, exists := graph.nodes[cell]
+		if !exists {
+			continue
+		}
+		formula := node.formula
+
+		// 检查是否是批量优化类型
+		isBatchType := false
+
+		// SUMIFS/AVERAGEIFS
+		if extractSUMIFSFromFormula(formula) != "" || extractAVERAGEIFSFromFormula(formula) != "" {
+			isBatchType = true
+		}
+
+		// INDEX-MATCH
+		if strings.Contains(formula, "INDEX(") && strings.Contains(formula, "MATCH(") {
+			isBatchType = true
+		}
+
+		if !isBatchType {
+			simpleFormulas = append(simpleFormulas, cell)
+		}
+	}
+
+	if len(simpleFormulas) == 0 {
+		return 0
+	}
+
+	// 并行计算简单公式
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	calculatedCount := 0
+
+	// 使用 worker pool
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(simpleFormulas) {
+		numWorkers = len(simpleFormulas)
+	}
+
+	cellChan := make(chan string, len(simpleFormulas))
+	for _, cell := range simpleFormulas {
+		cellChan <- cell
+	}
+	close(cellChan)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for cell := range cellChan {
+				parts := strings.Split(cell, "!")
+				if len(parts) != 2 {
+					continue
+				}
+
+				sheet := parts[0]
+				cellName := parts[1]
+
+				// 获取公式
+				formula := ""
+				if node, exists := graph.nodes[cell]; exists {
+					formula = node.formula
+				}
+
+				// 计算公式
+				opts := Options{RawCellValue: true, MaxCalcIterations: 100}
+				value, err := f.CalcCellValueWithSubExprCache(sheet, cellName, formula, nil, worksheetCache, opts)
+				if err != nil {
+					continue
+				}
+
+				// 存入 worksheetCache
+				f.storeCalculatedValue(sheet, cellName, value, worksheetCache)
+
+				mu.Lock()
+				calculatedCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+	return calculatedCount
 }

@@ -31,6 +31,9 @@ func (c *SubExpressionCache) Store(expr, value string) {
 
 // Load retrieves a sub-expression result
 func (c *SubExpressionCache) Load(expr string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	value, ok := c.cache[expr]
@@ -117,6 +120,7 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 			// Replace SUMIFS expression with its cached numeric value
 			// Always quote to preserve string type
 			replacementValue := `"` + strings.ReplaceAll(cachedValue, `"`, `""`) + `"`
+
 			modifiedFormula = strings.Replace(modifiedFormula, sumifsExpr, replacementValue, 1)
 			replacements++
 		} else {
@@ -158,8 +162,7 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 
 	// If we replaced sub-expressions, evaluate the simplified formula
 	if replacements > 0 {
-		result, err := f.evalFormulaString(sheet, cell, modifiedFormula, worksheetCache, opts)
-		return result, err
+		return f.evalFormulaString(sheet, cell, modifiedFormula, worksheetCache, opts)
 	}
 
 	// No cached sub-expressions found

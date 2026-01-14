@@ -21798,10 +21798,48 @@ func (fn *formulaFuncs) DISPIMG(argsList *list.List) formulaArg {
 // This is useful when many formulas access different rows of the same column range
 // Example: J2 accesses K2:AAC2, J3 accesses K3:AAC3, etc.
 // Instead of loading each row separately, we load all rows at once
+//
+// OPTIMIZATION: Added threshold control to prevent memory explosion
+// - Max 50,000 rows per preload
+// - Max 500 columns per preload
+// - Max 10,000,000 cells total per preload
 func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int, worksheetCache *WorksheetCache) error {
-	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列)",
+	// Threshold control to prevent memory explosion
+	const maxRows = 50000
+	const maxCols = 500
+	const maxCells = 10000000
+
+	numRows := endRow - startRow + 1
+	numCols := endCol - startCol + 1
+	totalCells := numRows * numCols
+
+	// Apply thresholds
+	if numRows > maxRows {
+		log.Printf("⚠️  [PreloadColumnRange] Row count %d exceeds threshold %d, limiting to %d rows",
+			numRows, maxRows, maxRows)
+		endRow = startRow + maxRows - 1
+		numRows = maxRows
+	}
+	if numCols > maxCols {
+		log.Printf("⚠️  [PreloadColumnRange] Column count %d exceeds threshold %d, limiting to %d columns",
+			numCols, maxCols, maxCols)
+		endCol = startCol + maxCols - 1
+		numCols = maxCols
+	}
+	totalCells = numRows * numCols
+	if totalCells > maxCells {
+		// Reduce rows to fit within cell limit
+		maxAllowedRows := maxCells / numCols
+		log.Printf("⚠️  [PreloadColumnRange] Cell count %d exceeds threshold %d, limiting to %d rows",
+			totalCells, maxCells, maxAllowedRows)
+		endRow = startRow + maxAllowedRows - 1
+		numRows = maxAllowedRows
+		totalCells = numRows * numCols
+	}
+
+	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列 = %d cells)",
 		sheet, startRow, startCol, endRow, endCol,
-		endRow-startRow+1, endCol-startCol+1)
+		numRows, numCols, totalCells)
 
 	start := time.Now()
 

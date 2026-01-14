@@ -314,11 +314,14 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, works
 		return map[string]float64{}
 	}
 
-	// 关键优化：使用 worksheetCache 的数据！
-	sheetData := worksheetCache.GetSheet(sourceSheet)
-	rows := f.convertCacheToRows(sheetData)
+	// 直接从文件读取原始数据
+	// 注意：worksheetCache 只存储计算结果，不存储原始数据
+	rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil {
+		return map[string]float64{}
+	}
 
-	// Build result map by scanning once (使用缓存数据)
+	// Build result map by scanning once
 	resultMap := f.scanRowsAndBuildResultMap(sourceSheet, rows, sumCol, criteria1Col, criteria2Col)
 
 	// Fill results for all formulas
