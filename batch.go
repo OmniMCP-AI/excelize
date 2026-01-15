@@ -1222,55 +1222,50 @@ func (f *File) findAffectedFormulas(calcChain *xlsxCalcChain, updatedCells map[s
 }
 
 // formulaReferencesUpdatedCells 检查公式是否引用了被更新的单元格
+// 使用 extractDependencies 函数解析公式依赖
 func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updatedCells map[string]map[string]bool, updatedColumns map[string]map[string]bool) bool {
-	// 去掉公式两端的单引号（如果有）
-	formula = strings.Trim(formula, "'")
+	// 使用公式解析器提取依赖
+	deps := extractDependencies(formula, currentSheet, "")
 
-	// 检查全列引用（A:A, $A:$A, 'Sheet'!A:A, 中文表名!A:A 等）
-	colRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([^\s\(\)!]+!))?(\$?[A-Z]+):(\$?[A-Z]+)`)
-	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
-
-	for _, match := range colMatches {
-		refSheet := currentSheet
-		if match[1] != "" {
-			refSheet = match[1] // 单引号表名
-		} else if match[2] != "" {
-			refSheet = strings.TrimSuffix(match[2], "!")
+	for _, dep := range deps {
+		// dep 格式: "Sheet!Cell" 或 "Sheet!Col:COLUMN_RANGE"
+		parts := strings.SplitN(dep, "!", 2)
+		if len(parts) != 2 {
+			continue
 		}
+		refSheet := parts[0]
+		refCell := parts[1]
 
-		// 优化：直接检查列索引，而不是遍历所有单元格
-		if updatedColumns[refSheet] != nil {
-			startCol := strings.ReplaceAll(match[3], "$", "")
-			endCol := strings.ReplaceAll(match[4], "$", "")
-
-			// 检查是否有更新的列在这个范围内
-			for colName := range updatedColumns[refSheet] {
-				if colName >= startCol && colName <= endCol {
-					return true
-				}
+		// 检查是否是列范围引用
+		if strings.HasSuffix(refCell, ":COLUMN_RANGE") {
+			colName := strings.TrimSuffix(refCell, ":COLUMN_RANGE")
+			if updatedColumns[refSheet] != nil && updatedColumns[refSheet][colName] {
+				return true
 			}
+			continue
 		}
-	}
 
-	// 单元格引用匹配（支持单引号表名和中文表名）
-	// 使用\b单词边界或(?:^|[^A-Za-z0-9_])确保不会匹配到运算符
-	cellRefPattern := regexp.MustCompile(`(?:'([^']+)'!|(?:^|[^A-Za-z0-9_])([A-Za-z0-9_]+!))?(\$?[A-Z]+\$?[0-9]+)`)
-	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
-
-	for _, match := range matches {
-		refSheet := currentSheet
-		if match[1] != "" {
-			refSheet = match[1] // 单引号表名
-		} else if match[2] != "" {
-			// 移除尾部的!，并且移除前面的非字母数字字符（如=, +等）
-			refSheet = strings.TrimSuffix(match[2], "!")
-			// 移除前导的非字母数字字符
-			refSheet = strings.TrimLeft(refSheet, "=+-*/^&|<>(),")
-		}
-		refCell := strings.ReplaceAll(match[3], "$", "")
-
+		// 检查单元格是否在更新列表中
 		if updatedCells[refSheet] != nil && updatedCells[refSheet][refCell] {
 			return true
+		}
+
+		// 检查单元格所在的列是否在更新列表中（用于列范围引用）
+		col, _, err := CellNameToCoordinates(refCell)
+		if err == nil {
+			colName, _ := ColumnNumberToName(col)
+			if updatedColumns[refSheet] != nil && updatedColumns[refSheet][colName] {
+				// 检查是否有该列的单元格被更新
+				for cell := range updatedCells[refSheet] {
+					cellCol, _, err := CellNameToCoordinates(cell)
+					if err == nil {
+						cellColName, _ := ColumnNumberToName(cellCol)
+						if cellColName == colName {
+							return true
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1278,87 +1273,43 @@ func (f *File) formulaReferencesUpdatedCells(formula, currentSheet string, updat
 }
 
 // formulaReferencesAffectedCells 检查公式是否引用了受影响的单元格
+// 使用 extractDependencies 函数解析公式依赖
 func (f *File) formulaReferencesAffectedCells(formula, currentSheet string, affectedCells map[string]bool) bool {
-	// 去掉公式两端的单引号（如果有）
-	formula = strings.Trim(formula, "'")
+	// 使用公式解析器提取依赖
+	deps := extractDependencies(formula, currentSheet, "")
 
-	// 检查全列引用（A:A, $A:$A, 'Sheet'!A:A, 中文表名!A:A 等）
-	colRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([^\s\(\)!]+!))?(\$?[A-Z]+):(\$?[A-Z]+)`)
-	colMatches := colRefPattern.FindAllStringSubmatch(formula, -1)
-
-	for _, match := range colMatches {
-		refSheet := currentSheet
-		if match[1] != "" {
-			refSheet = match[1] // 单引号表名
-		} else if match[2] != "" {
-			refSheet = strings.TrimSuffix(match[2], "!")
+	for _, dep := range deps {
+		// dep 格式: "Sheet!Cell" 或 "Sheet!Col:COLUMN_RANGE"
+		parts := strings.SplitN(dep, "!", 2)
+		if len(parts) != 2 {
+			continue
 		}
+		refSheet := parts[0]
+		refCell := parts[1]
 
-		// 检查受影响的单元格是否在这个列范围内
-		for cellKey := range affectedCells {
-			// 解析 cellKey (Sheet!Cell)
-			parts := strings.Split(cellKey, "!")
-			if len(parts) == 2 && parts[0] == refSheet {
-				col, _, err := CellNameToCoordinates(parts[1])
-				if err == nil {
-					colName, _ := ColumnNumberToName(col)
-					startCol := strings.ReplaceAll(match[3], "$", "")
-					endCol := strings.ReplaceAll(match[4], "$", "")
-
-					if colName >= startCol && colName <= endCol {
-						return true
+		// 检查是否是列范围引用
+		if strings.HasSuffix(refCell, ":COLUMN_RANGE") {
+			colName := strings.TrimSuffix(refCell, ":COLUMN_RANGE")
+			// 检查是否有受影响的单元格在该列
+			for cellKey := range affectedCells {
+				keyParts := strings.SplitN(cellKey, "!", 2)
+				if len(keyParts) == 2 && keyParts[0] == refSheet {
+					col, _, err := CellNameToCoordinates(keyParts[1])
+					if err == nil {
+						cellColName, _ := ColumnNumberToName(col)
+						if cellColName == colName {
+							return true
+						}
 					}
 				}
 			}
+			continue
 		}
-	}
 
-	// 单元格引用匹配（支持单引号表名和中文表名）
-	// 使用\b单词边界或(?:^|[^A-Za-z0-9_])确保不会匹配到运算符
-	cellRefPattern := regexp.MustCompile(`(?:'([^']+)'!|(?:^|[^A-Za-z0-9_])([A-Za-z0-9_]+!))?(\$?[A-Z]+\$?[0-9]+)`)
-	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
-
-	for _, match := range matches {
-		refSheet := currentSheet
-		if match[1] != "" {
-			refSheet = match[1] // 单引号表名
-		} else if match[2] != "" {
-			// 移除尾部的!，并且移除前面的非字母数字字符（如=, +等）
-			refSheet = strings.TrimSuffix(match[2], "!")
-			// 移除前导的非字母数字字符
-			refSheet = strings.TrimLeft(refSheet, "=+-*/^&|<>(),")
-		}
-		refCell := strings.ReplaceAll(match[3], "$", "")
+		// 检查单元格是否在受影响列表中
 		cellKey := refSheet + "!" + refCell
-
 		if affectedCells[cellKey] {
 			return true
-		}
-	}
-
-	// 检查范围引用（A1:B10, Sheet!A1:B10 等）
-	rangeRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([^\s\(\)!]+!))?(\$?[A-Z]+\$?[0-9]+):(\$?[A-Z]+\$?[0-9]+)`)
-	rangeMatches := rangeRefPattern.FindAllStringSubmatch(formula, -1)
-
-	for _, match := range rangeMatches {
-		refSheet := currentSheet
-		if match[1] != "" {
-			refSheet = match[1]
-		} else if match[2] != "" {
-			refSheet = strings.TrimSuffix(match[2], "!")
-		}
-
-		startCell := strings.ReplaceAll(match[3], "$", "")
-		endCell := strings.ReplaceAll(match[4], "$", "")
-
-		// 检查受影响的单元格是否在这个范围内
-		for cellKey := range affectedCells {
-			parts := strings.Split(cellKey, "!")
-			if len(parts) == 2 && parts[0] == refSheet {
-				if f.cellInRange(parts[1], startCell, endCell) {
-					return true
-				}
-			}
 		}
 	}
 
@@ -1433,15 +1384,442 @@ func (f *File) recalculateAffectedCells(calcChain *xlsxCalcChain, affectedFormul
 	return nil
 }
 
+// BatchUpdateValuesAndFormulasWithRecalc 批量更新单元格值和公式，并只重新计算受影响的依赖公式
+//
+// 这是一个高性能的批量更新方法，适用于同时更新多个单元格的值和公式的场景。
+// 与 BatchUpdateAndRecalculate + BatchSetFormulasAndRecalculate + RecalculateAllWithDependency 的组合相比，
+// 此方法只清除一次缓存并只计算受影响的公式，避免了多次全局重算。
+//
+// 功能特点：
+// 1. ✅ 批量设置单元格值（不触发逐个缓存清理）
+// 2. ✅ 批量设置公式（不触发逐个重算）
+// 3. ✅ 统一分析所有更新的依赖关系
+// 4. ✅ 只清除受影响公式的缓存（一次性）
+// 5. ✅ 使用 DAG 按正确顺序计算受影响的公式（只计算一次）
+// 6. ✅ 自动更新 calcChain
+//
+// 参数：
+//
+//	valueUpdates: 单元格值更新列表（可以为空）
+//	formulaUpdates: 公式更新列表（可以为空）
+//
+// 返回：
+//
+//	error: 错误信息
+//
+// 示例：
+//
+//	values := []excelize.CellUpdate{
+//	    {Sheet: "Sheet1", Cell: "A1", Value: 100},
+//	    {Sheet: "Sheet1", Cell: "A2", Value: 200},
+//	}
+//	formulas := []excelize.FormulaUpdate{
+//	    {Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2"},
+//	    {Sheet: "Sheet1", Cell: "C1", Formula: "=B1+10"},
+//	}
+//	err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate, formulaUpdates []FormulaUpdate) error {
+	if len(valueUpdates) == 0 && len(formulaUpdates) == 0 {
+		return nil
+	}
+
+	// 1. 批量设置单元格值（不触发重算）
+	if len(valueUpdates) > 0 {
+		if err := f.BatchSetCellValue(valueUpdates); err != nil {
+			return err
+		}
+	}
+
+	// 2. 批量设置公式（不触发重算）
+	if len(formulaUpdates) > 0 {
+		if err := f.BatchSetFormulas(formulaUpdates); err != nil {
+			return err
+		}
+		// 更新 calcChain
+		if err := f.updateCalcChainForFormulas(formulaUpdates); err != nil {
+			return err
+		}
+	}
+
+	// 3. 收集所有被更新的单元格（值 + 公式）
+	updatedCells := make(map[string]map[string]bool)   // sheet -> cell -> true
+	updatedColumns := make(map[string]map[string]bool) // sheet -> column -> true
+
+	// 添加值更新
+	for _, update := range valueUpdates {
+		if updatedCells[update.Sheet] == nil {
+			updatedCells[update.Sheet] = make(map[string]bool)
+			updatedColumns[update.Sheet] = make(map[string]bool)
+		}
+		updatedCells[update.Sheet][update.Cell] = true
+
+		col, _, err := CellNameToCoordinates(update.Cell)
+		if err == nil {
+			colName, _ := ColumnNumberToName(col)
+			updatedColumns[update.Sheet][colName] = true
+		}
+	}
+
+	// 添加公式更新（公式单元格本身也需要被计算）
+	formulaCells := make(map[string]bool) // 记录公式单元格，用于后续排除
+	for _, formula := range formulaUpdates {
+		if updatedCells[formula.Sheet] == nil {
+			updatedCells[formula.Sheet] = make(map[string]bool)
+			updatedColumns[formula.Sheet] = make(map[string]bool)
+		}
+		updatedCells[formula.Sheet][formula.Cell] = true
+		formulaCells[formula.Sheet+"!"+formula.Cell] = true
+
+		col, _, err := CellNameToCoordinates(formula.Cell)
+		if err == nil {
+			colName, _ := ColumnNumberToName(col)
+			updatedColumns[formula.Sheet][colName] = true
+		}
+	}
+
+	// 4. 重建 calcChain 以确保包含所有公式
+	if err := f.RebuildCalcChain(); err != nil {
+		return err
+	}
+	calcChain := f.CalcChain
+
+	// 5. 根据是否有 calcChain 选择不同的依赖分析方法
+	var affectedFormulas map[string]bool
+	if calcChain != nil && len(calcChain.C) > 0 {
+		// 有 calcChain，使用快速方法
+		affectedFormulas = f.findAffectedFormulas(calcChain, updatedCells, updatedColumns)
+	} else {
+		// 没有公式，直接返回
+		return nil
+	}
+
+	// 6. 将新设置的公式也加入受影响列表（它们需要被计算）
+	for cellKey := range formulaCells {
+		affectedFormulas[cellKey] = true
+	}
+
+	// 7. 如果没有受影响的公式，直接返回
+	if len(affectedFormulas) == 0 {
+		return nil
+	}
+
+	// 8. 清除受影响公式的缓存（一次性清除）
+	for cellKey := range affectedFormulas {
+		cacheKey := cellKey + "!raw=false"
+		f.calcCache.Delete(cacheKey)
+		cacheKeyRaw := cellKey + "!raw=true"
+		f.calcCache.Delete(cacheKeyRaw)
+	}
+
+	// 9. 使用 DAG 按正确顺序重新计算受影响的公式
+	err := f.recalculateAffectedCellsWithDAG(nil, affectedFormulas)
+
+	return err
+}
+
+// findAffectedFormulasByScanning 通过扫描所有工作表来找出受影响的公式
+// 这个方法不依赖 calcChain，适用于 calcChain 不完整或不存在的情况
+func (f *File) findAffectedFormulasByScanning(updatedCells map[string]map[string]bool, updatedColumns map[string]map[string]bool) map[string]bool {
+	affected := make(map[string]bool)
+
+	// 遍历所有工作表
+	sheetList := f.GetSheetList()
+	for _, sheetName := range sheetList {
+		ws, err := f.workSheetReader(sheetName)
+		if err != nil || ws.SheetData.Row == nil {
+			continue
+		}
+
+		for _, row := range ws.SheetData.Row {
+			for _, cell := range row.C {
+				if cell.F == nil {
+					continue
+				}
+
+				formula := cell.F.Content
+				if formula == "" && cell.F.T == STCellFormulaTypeShared && cell.F.Si != nil {
+					formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
+				}
+
+				if formula == "" {
+					continue
+				}
+
+				// 检查公式是否引用了被更新的单元格
+				if f.formulaReferencesUpdatedCells(formula, sheetName, updatedCells, updatedColumns) {
+					cellKey := sheetName + "!" + cell.R
+					affected[cellKey] = true
+				}
+			}
+		}
+	}
+
+	// 递归查找间接依赖
+	changed := true
+	for changed {
+		changed = false
+
+		for _, sheetName := range sheetList {
+			ws, err := f.workSheetReader(sheetName)
+			if err != nil || ws.SheetData.Row == nil {
+				continue
+			}
+
+			for _, row := range ws.SheetData.Row {
+				for _, cell := range row.C {
+					cellKey := sheetName + "!" + cell.R
+					if affected[cellKey] {
+						continue // 已经标记为受影响
+					}
+
+					if cell.F == nil {
+						continue
+					}
+
+					formula := cell.F.Content
+					if formula == "" && cell.F.T == STCellFormulaTypeShared && cell.F.Si != nil {
+						formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
+					}
+
+					if formula == "" {
+						continue
+					}
+
+					// 检查公式是否引用了受影响的单元格
+					if f.formulaReferencesAffectedCells(formula, sheetName, affected) {
+						affected[cellKey] = true
+						changed = true
+					}
+				}
+			}
+		}
+	}
+
+	return affected
+}
+
+// recalculateAffectedCellsWithDAG 使用 DAG 按依赖顺序重新计算受影响的单元格
+func (f *File) recalculateAffectedCellsWithDAG(calcChain *xlsxCalcChain, affectedFormulas map[string]bool) error {
+	if len(affectedFormulas) == 0 {
+		return nil
+	}
+
+	// 构建 DAG
+	dag := newCalcDAG()
+
+	// 直接从 affectedFormulas 构建 DAG，不依赖 calcChain 的顺序
+	for cellKey := range affectedFormulas {
+		dag.addNode(cellKey)
+
+		parts := strings.SplitN(cellKey, "!", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sheetName, cellRef := parts[0], parts[1]
+
+		// 获取公式内容
+		ws, err := f.workSheetReader(sheetName)
+		if err != nil {
+			continue
+		}
+
+		col, row, err := CellNameToCoordinates(cellRef)
+		if err != nil {
+			continue
+		}
+
+		cellData := f.getCellFromWorksheet(ws, col, row)
+		if cellData == nil || cellData.F == nil {
+			continue
+		}
+
+		formula := cellData.F.Content
+		if formula == "" && cellData.F.T == STCellFormulaTypeShared && cellData.F.Si != nil {
+			formula, _ = getSharedFormula(ws, *cellData.F.Si, cellRef)
+		}
+
+		if formula == "" {
+			continue
+		}
+
+		// 解析公式依赖，添加边
+		deps := f.extractFormulaDependencies(formula, sheetName)
+		for _, dep := range deps {
+			if affectedFormulas[dep] {
+				dag.addEdge(dep, cellKey) // dep -> cellKey 表示 cellKey 依赖于 dep
+			}
+		}
+	}
+
+	// 拓扑排序
+	sorted, err := dag.topologicalSort()
+	if err != nil {
+		// 如果有循环依赖，回退到按 calcChain 顺序计算
+		return f.recalculateAffectedCells(calcChain, affectedFormulas)
+	}
+
+	// 按拓扑顺序计算
+	for _, cellKey := range sorted {
+		parts := strings.SplitN(cellKey, "!", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sheet, cell := parts[0], parts[1]
+
+		if err := f.recalculateCell(sheet, cell); err != nil {
+			continue // 忽略单个单元格的错误
+		}
+	}
+
+	return nil
+}
+
+// extractFormulaDependencies 从公式中提取所有依赖的单元格
+func (f *File) extractFormulaDependencies(formula, currentSheet string) []string {
+	var deps []string
+
+	// 匹配单元格引用：Sheet!A1 或 A1 或 Sheet!A1:B2 或 A1:B2
+	// 也处理带引号的工作表名：'Sheet Name'!A1
+	cellRefPattern := regexp.MustCompile(`(?:'([^']+)'!|([A-Za-z_][A-Za-z0-9_]*!))?(\$?[A-Z]+\$?\d+)(?::(\$?[A-Z]+\$?\d+))?`)
+
+	matches := cellRefPattern.FindAllStringSubmatch(formula, -1)
+	seen := make(map[string]bool)
+
+	for _, match := range matches {
+		var sheet string
+		if match[1] != "" {
+			sheet = match[1] // 带引号的工作表名
+		} else if match[2] != "" {
+			sheet = strings.TrimSuffix(match[2], "!")
+		} else {
+			sheet = currentSheet
+		}
+
+		startCell := match[3]
+		endCell := match[4]
+
+		// 移除 $ 符号
+		startCell = strings.ReplaceAll(startCell, "$", "")
+		if endCell != "" {
+			endCell = strings.ReplaceAll(endCell, "$", "")
+		}
+
+		if endCell == "" {
+			// 单个单元格引用
+			cellKey := sheet + "!" + startCell
+			if !seen[cellKey] {
+				deps = append(deps, cellKey)
+				seen[cellKey] = true
+			}
+		} else {
+			// 范围引用 - 展开范围中的所有单元格
+			startCol, startRow, err1 := CellNameToCoordinates(startCell)
+			endCol, endRow, err2 := CellNameToCoordinates(endCell)
+			if err1 == nil && err2 == nil {
+				// 限制展开的单元格数量，避免大范围导致性能问题
+				maxCells := 1000
+				count := 0
+				for row := startRow; row <= endRow && count < maxCells; row++ {
+					for col := startCol; col <= endCol && count < maxCells; col++ {
+						cellName, _ := CoordinatesToCellName(col, row)
+						cellKey := sheet + "!" + cellName
+						if !seen[cellKey] {
+							deps = append(deps, cellKey)
+							seen[cellKey] = true
+							count++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return deps
+}
+
+// calcDAG 计算依赖图
+type calcDAG struct {
+	nodes    map[string]bool
+	edges    map[string][]string // from -> []to
+	inDegree map[string]int
+}
+
+func newCalcDAG() *calcDAG {
+	return &calcDAG{
+		nodes:    make(map[string]bool),
+		edges:    make(map[string][]string),
+		inDegree: make(map[string]int),
+	}
+}
+
+func (d *calcDAG) addNode(node string) {
+	if !d.nodes[node] {
+		d.nodes[node] = true
+		d.inDegree[node] = 0
+	}
+}
+
+func (d *calcDAG) addEdge(from, to string) {
+	d.addNode(from)
+	d.addNode(to)
+	d.edges[from] = append(d.edges[from], to)
+	d.inDegree[to]++
+}
+
+func (d *calcDAG) topologicalSort() ([]string, error) {
+	var result []string
+	queue := make([]string, 0)
+
+	// 找出所有入度为 0 的节点
+	for node := range d.nodes {
+		if d.inDegree[node] == 0 {
+			queue = append(queue, node)
+		}
+	}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		result = append(result, node)
+
+		for _, neighbor := range d.edges[node] {
+			d.inDegree[neighbor]--
+			if d.inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+
+	if len(result) != len(d.nodes) {
+		return nil, fmt.Errorf("circular dependency detected")
+	}
+
+	return result, nil
+}
+
 // RebuildCalcChain 扫描所有工作表的公式并重建 calcChain
 func (f *File) RebuildCalcChain() error {
 	calcChain := &xlsxCalcChain{}
 	sheetList := f.GetSheetList()
 
-	for sheetIndex, sheetName := range sheetList {
+	// 获取 sheetID 映射 (sheetName -> sheetID)
+	sheetIDMap := make(map[string]int)
+	sheetMap := f.GetSheetMap() // map[sheetID]sheetName
+	for id, name := range sheetMap {
+		sheetIDMap[name] = id
+	}
+
+	for _, sheetName := range sheetList {
 		ws, err := f.workSheetReader(sheetName)
 		if err != nil || ws.SheetData.Row == nil {
 			continue
+		}
+
+		// 获取正确的 sheetID
+		sheetID, ok := sheetIDMap[sheetName]
+		if !ok {
+			// 如果没有找到，使用索引+1（Excel 的 sheetID 通常从 1 开始）
+			sheetID = len(calcChain.C) + 1
 		}
 
 		for _, row := range ws.SheetData.Row {
@@ -1455,7 +1833,7 @@ func (f *File) RebuildCalcChain() error {
 					if formula != "" {
 						calcChain.C = append(calcChain.C, xlsxCalcChainC{
 							R: cell.R,
-							I: sheetIndex,
+							I: sheetID,
 						})
 					}
 				}
