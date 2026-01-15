@@ -206,8 +206,8 @@ func (f *File) evalFormulaString(sheet, cell, formula string, worksheetCache *Wo
 		maxCalcIterations: opts.MaxCalcIterations,
 		iterations:        make(map[string]uint),
 		iterationsCache:   make(map[string]formulaArg),
-		rangeCache:        make(map[string]formulaArg),
-		worksheetCache:    worksheetCache, // Pass worksheetCache to formula engine
+		// rangeCache is sync.Map, no initialization needed
+		worksheetCache: worksheetCache, // Pass worksheetCache to formula engine
 	}
 
 	// Evaluate the parsed tokens using the same logic as calcCellValue

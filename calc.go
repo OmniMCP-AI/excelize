@@ -248,8 +248,8 @@ type calcContext struct {
 	maxCalcIterations uint
 	iterations        map[string]uint
 	iterationsCache   map[string]formulaArg
-	rangeCache        map[string]formulaArg // Cache for range references like "$K2:$AAC2"
-	worksheetCache    *WorksheetCache       // Batch calculation cache for recently calculated values
+	rangeCache        sync.Map        // Cache for range references like "$K2:$AAC2" (thread-safe)
+	worksheetCache    *WorksheetCache // Batch calculation cache for recently calculated values
 }
 
 // cellRef defines the structure of a cell reference.
@@ -888,7 +888,7 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		maxCalcIterations: options.MaxCalcIterations,
 		iterations:        make(map[string]uint),
 		iterationsCache:   make(map[string]formulaArg),
-		rangeCache:        make(map[string]formulaArg),
+		// rangeCache is sync.Map, no initialization needed
 	}, sheet, cell); err != nil {
 		result = token.String
 		return
@@ -2261,7 +2261,9 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	ref := fmt.Sprintf("%s!%s", sheet, cell)
 
 	// Check calcCache first at cellResolver layer to avoid redundant work
-	// Only use cache if value is formulaArg type (safe type assertion)
+	// Use the same cache key format as CalcCellValue for consistency
+	// Note: We check both raw=true and raw=false because cellResolver returns formulaArg
+	// and either cache entry would contain the computed value
 	if cached, ok := f.calcCache.Load(ref); ok {
 		if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
 			return cachedArg, nil
@@ -2281,16 +2283,24 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	}
 
 	if formula, _ := f.getCellFormulaReadOnly(sheet, cell, true); len(formula) != 0 {
-		// 对于跨工作表引用，优先使用缓存值
+		// 对于跨工作表引用，优先使用缓存值（即使是空值）
+		// 这避免了在 INDEX/MATCH 等函数中触发大量的递归计算
+		// Excel 文件中的缓存值通常是可靠的
 		if isCrossSheet {
-			if cachedValue, err := f.GetCellValue(sheet, cell, Options{RawCellValue: true}); err == nil && cachedValue != "" {
-				arg := newStringFormulaArg(cachedValue)
-				// 根据cell类型转换arg类型，确保数值类型正确
-				if cellType, _ := f.GetCellType(sheet, cell); cellType == CellTypeNumber || cellType == CellTypeUnset {
-					return arg.ToNumber(), nil
+			cachedValue, err := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
+			if err == nil {
+				// 有缓存值时使用缓存值
+				if cachedValue != "" {
+					arg := newStringFormulaArg(cachedValue)
+					// 根据cell类型转换arg类型，确保数值类型正确
+					if cellType, _ := f.GetCellType(sheet, cell); cellType == CellTypeNumber || cellType == CellTypeUnset {
+						return arg.ToNumber(), nil
+					}
+					return arg, nil
 				}
-				return arg, nil
-			} else {
+				// 缓存值为空时，返回空值（这可能是公式的正确结果）
+				// 这避免了触发递归计算
+				return newEmptyFormulaArg(), nil
 			}
 		}
 
@@ -2316,6 +2326,13 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 						return fallbackArg, nil
 					}
 				}
+
+				// CRITICAL FIX: Cache successful calculation result to global calcCache
+				// This prevents redundant recalculation of the same cell in recursive scenarios
+				if arg.Type != ArgError {
+					f.calcCache.Store(ref, arg)
+				}
+
 				return arg, nil
 			}
 			cachedResult := ctx.iterationsCache[ref]
@@ -2725,12 +2742,11 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 		cacheKey := generateRangeCacheKey(sheet, valueRange)
 
 		// Try context cache first (for same formula, multiple range references)
-		if ctx.rangeCache != nil {
-			if cached, ok := ctx.rangeCache[cacheKey]; ok {
-				arg.Matrix = cached.Matrix
-				arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
-				return
-			}
+		if cached, ok := ctx.rangeCache.Load(cacheKey); ok {
+			cachedArg := cached.(formulaArg)
+			arg.Matrix = cachedArg.Matrix
+			arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
+			return
 		}
 
 		// Then check global range cache
@@ -2779,9 +2795,7 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 				if !needRebuild {
 					// Cache is still valid, use it
 					arg.Matrix = cachedMatrix
-					if ctx.rangeCache != nil {
-						ctx.rangeCache[cacheKey] = arg
-					}
+					ctx.rangeCache.Store(cacheKey, arg)
 					arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
 					return
 				}
@@ -2791,9 +2805,7 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 				// No worksheetCache, use cached matrix as-is
 				arg.Matrix = cached.([][]formulaArg)
 				// Store in context cache for next use
-				if ctx.rangeCache != nil {
-					ctx.rangeCache[cacheKey] = arg
-				}
+				ctx.rangeCache.Store(cacheKey, arg)
 				arg.cellRefs, arg.cellRanges = cellRefs, cellRanges
 				return
 			}
@@ -2812,9 +2824,7 @@ func (f *File) rangeResolver(ctx *calcContext, cellRefs, cellRanges *list.List) 
 		}
 
 		// Store in both context cache and global cache
-		if ctx.rangeCache != nil {
-			ctx.rangeCache[cacheKey] = arg
-		}
+		ctx.rangeCache.Store(cacheKey, arg)
 
 		// Store result in LRU range cache
 		// Old entries are automatically evicted when capacity is reached
@@ -17883,23 +17893,28 @@ func (fn *formulaFuncs) INDEX(argsList *list.List) formulaArg {
 			return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
 		}
 
+		// 特殊处理：单行多列数组 + 2个参数
+		// Excel 行为：
+		// - INDEX(A1:B1, 1) -> 返回整行 {1, 4}，配合 SUM 使用得到 5（rowIdx=0）
+		// - INDEX($K2:$AAC2, 41) -> 返回第 41 列的值（rowIdx=40）
+		//
+		// 规则：对于单行多列数组，如果 rowIdx 超出行数范围，将其视为列索引
+		if len(array.Matrix) == 1 && len(array.Matrix[0]) > 1 && argsList.Len() == 2 {
+			if rowIdx >= len(array.Matrix) {
+				// rowIdx 超出行数，将其视为列索引
+				colIndex := rowIdx
+				if colIndex >= len(array.Matrix[0]) {
+					return newErrorFormulaArg(formulaErrorREF, "INDEX col_num out of range")
+				}
+				return array.Matrix[0][colIndex]
+			}
+			// rowIdx 在行数范围内（即 rowIdx=0），返回整行
+			return newMatrixFormulaArg([][]formulaArg{array.Matrix[rowIdx]})
+		}
+
 		// 检查行索引是否超出范围
 		if rowIdx >= len(array.Matrix) {
 			return newErrorFormulaArg(formulaErrorREF, "INDEX row_num out of range")
-		}
-
-		// 特殊处理：如果数组只有1行且只传了2个参数
-		// 这时需要判断：是要返回整行，还是返回该行的某一列
-		//
-		// Excel 的行为：
-		// - INDEX(A1:B1, 1) -> 返回整行 {1, 4}，配合 SUM 使用得到 5
-		// - INDEX(A1:B1, 2) -> row_num 超出范围（只有1行）
-		// - INDEX($K2:$AAC2, 41) -> 如果用在需要单个值的上下文中，返回第41列的值
-		//
-		// 为了兼容这两种用法，我们返回整行（作为矩阵），让上层函数决定如何使用
-		if len(array.Matrix) == 1 && argsList.Len() == 2 {
-			// 返回整行向量
-			return newMatrixFormulaArg([][]formulaArg{array.Matrix[rowIdx]})
 		}
 
 		// 返回行向量（单行的二维数组）
