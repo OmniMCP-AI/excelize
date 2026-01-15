@@ -2283,25 +2283,22 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	}
 
 	if formula, _ := f.getCellFormulaReadOnly(sheet, cell, true); len(formula) != 0 {
-		// 对于跨工作表引用，优先使用缓存值（即使是空值）
+		// 对于跨工作表引用，优先使用缓存值
 		// 这避免了在 INDEX/MATCH 等函数中触发大量的递归计算
 		// Excel 文件中的缓存值通常是可靠的
 		if isCrossSheet {
 			cachedValue, err := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
-			if err == nil {
+			if err == nil && cachedValue != "" {
 				// 有缓存值时使用缓存值
-				if cachedValue != "" {
-					arg := newStringFormulaArg(cachedValue)
-					// 根据cell类型转换arg类型，确保数值类型正确
-					if cellType, _ := f.GetCellType(sheet, cell); cellType == CellTypeNumber || cellType == CellTypeUnset {
-						return arg.ToNumber(), nil
-					}
-					return arg, nil
+				arg := newStringFormulaArg(cachedValue)
+				// 根据cell类型转换arg类型，确保数值类型正确
+				if cellType, _ := f.GetCellType(sheet, cell); cellType == CellTypeNumber || cellType == CellTypeUnset {
+					return arg.ToNumber(), nil
 				}
-				// 缓存值为空时，返回空值（这可能是公式的正确结果）
-				// 这避免了触发递归计算
-				return newEmptyFormulaArg(), nil
+				return arg, nil
 			}
+			// 缓存值为空时，不再返回空值，而是继续计算
+			// 这样RecalculateAllWithDependency可以正确计算跨sheet的公式
 		}
 
 		ctx.mu.Lock()
@@ -21813,44 +21810,10 @@ func (fn *formulaFuncs) DISPIMG(argsList *list.List) formulaArg {
 // This is useful when many formulas access different rows of the same column range
 // Example: J2 accesses K2:AAC2, J3 accesses K3:AAC3, etc.
 // Instead of loading each row separately, we load all rows at once
-//
-// OPTIMIZATION: Added threshold control to prevent memory explosion
-// - Max 50,000 rows per preload
-// - Max 500 columns per preload
-// - Max 10,000,000 cells total per preload
 func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int, worksheetCache *WorksheetCache) error {
-	// Threshold control to prevent memory explosion
-	const maxRows = 50000
-	const maxCols = 500
-	const maxCells = 10000000
-
 	numRows := endRow - startRow + 1
 	numCols := endCol - startCol + 1
 	totalCells := numRows * numCols
-
-	// Apply thresholds
-	if numRows > maxRows {
-		log.Printf("⚠️  [PreloadColumnRange] Row count %d exceeds threshold %d, limiting to %d rows",
-			numRows, maxRows, maxRows)
-		endRow = startRow + maxRows - 1
-		numRows = maxRows
-	}
-	if numCols > maxCols {
-		log.Printf("⚠️  [PreloadColumnRange] Column count %d exceeds threshold %d, limiting to %d columns",
-			numCols, maxCols, maxCols)
-		endCol = startCol + maxCols - 1
-		numCols = maxCols
-	}
-	totalCells = numRows * numCols
-	if totalCells > maxCells {
-		// Reduce rows to fit within cell limit
-		maxAllowedRows := maxCells / numCols
-		log.Printf("⚠️  [PreloadColumnRange] Cell count %d exceeds threshold %d, limiting to %d rows",
-			totalCells, maxCells, maxAllowedRows)
-		endRow = startRow + maxAllowedRows - 1
-		numRows = maxAllowedRows
-		totalCells = numRows * numCols
-	}
 
 	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列 = %d cells)",
 		sheet, startRow, startCol, endRow, endCol,

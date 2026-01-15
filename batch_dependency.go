@@ -133,6 +133,15 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	log.Printf("  📊 [Dependency Analysis] Collected %d formulas, %d columns (%d with formulas, %d pure data)",
 		len(graph.nodes), len(graph.columnMetadata), formulaCols, dataCols)
 
+	// Debug: 检查特定列的 metadata
+	for _, colKey := range []string{"补货计划!G", "补货计划!A", "补货汇总!I", "补货汇总!J"} {
+		if meta := graph.columnMetadata[colKey]; meta != nil {
+			log.Printf("  🔍 [DEBUG] columnMetadata[%s] = hasFormulas:%v, maxRow:%d", colKey, meta.hasFormulas, meta.maxRow)
+		} else {
+			log.Printf("  🔍 [DEBUG] columnMetadata[%s] = nil", colKey)
+		}
+	}
+
 	// Step 2: Build column index for efficient column range expansion (only formula columns matter)
 	columnIndex := make(map[string][]string)
 	for cellRef := range graph.nodes {
@@ -161,9 +170,15 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	log.Printf("  📊 [Dependency Analysis] Built column index: %d columns with formulas", len(columnIndex))
 
 	// Step 3: Extract dependencies with smart column resolution
+	debugCells := map[string]bool{"补货汇总!I3": true, "补货汇总!J3": true, "补货汇总!I2": true, "补货汇总!I4": true}
 	for _, info := range formulasToProcess {
 		deps := extractDependenciesOptimized(info.formula, info.sheet, info.cellRef, columnIndex, graph.columnMetadata)
 		graph.nodes[info.fullCell].dependencies = deps
+
+		// Debug: 检查特定单元格的依赖
+		if debugCells[info.fullCell] {
+			log.Printf("  🔍 [DEBUG] %s 依赖: %v", info.fullCell, deps)
+		}
 	}
 
 	log.Printf("  📊 [Dependency Analysis] Extracted dependencies")
@@ -176,6 +191,38 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	log.Printf("  📈 [Dependency Analysis] Dependency levels: %d levels", len(graph.levels))
 	for i, cells := range graph.levels {
 		log.Printf("      Level %d: %d formulas", i, len(cells))
+	}
+
+	// Debug: 检查 Level 78 中的公式
+	for levelIdx, cells := range graph.levels {
+		if levelIdx != 78 {
+			continue
+		}
+		buhuoHuizongI := 0
+		buhuoHuizongJ := 0
+		otherFormulas := 0
+		for _, cell := range cells {
+			if strings.HasPrefix(cell, "补货汇总!I") {
+				buhuoHuizongI++
+			} else if strings.HasPrefix(cell, "补货汇总!J") {
+				buhuoHuizongJ++
+			} else {
+				otherFormulas++
+			}
+		}
+		log.Printf("  🔍 [Level %d Analysis] 补货汇总!I=%d, 补货汇总!J=%d, other=%d", levelIdx, buhuoHuizongI, buhuoHuizongJ, otherFormulas)
+		// 显示前几个 other 公式
+		count := 0
+		for _, cell := range cells {
+			if !strings.HasPrefix(cell, "补货汇总!I") && !strings.HasPrefix(cell, "补货汇总!J") {
+				if count < 5 {
+					if node, exists := graph.nodes[cell]; exists {
+						log.Printf("    Example other: %s = %s", cell, node.formula)
+					}
+					count++
+				}
+			}
+		}
 	}
 
 	return graph
@@ -216,6 +263,15 @@ func (g *dependencyGraph) assignLevels() {
 		}
 	}
 
+	// Debug: 检查特定列是否在 columnMaxLevel 中
+	for _, colKey := range []string{"补货计划!G", "补货计划!J", "补货汇总!I", "补货汇总!J"} {
+		if level, exists := columnMaxLevel[colKey]; exists {
+			log.Printf("  🔍 [DEBUG assignLevels] columnMaxLevel[%s] = %d", colKey, level)
+		} else {
+			log.Printf("  🔍 [DEBUG assignLevels] columnMaxLevel[%s] 不存在！", colKey)
+		}
+	}
+
 	// Helper function to check if a dependency is resolved
 	isDependencyResolved := func(dep string) (bool, int) {
 		if strings.HasPrefix(dep, "COLUMN:") {
@@ -247,10 +303,15 @@ func (g *dependencyGraph) assignLevels() {
 	// IMPORTANT: 两阶段处理，避免遍历顺序导致的竞态问题
 	// 阶段1：收集所有没有未解决依赖的节点
 	level0Candidates := make([]string, 0)
+	debugCells2 := map[string]bool{"补货汇总!I3": true, "补货汇总!J3": true, "补货汇总!I2": true, "补货汇总!I4": true}
 	for cell, node := range g.nodes {
 		hasDeps := false
 		for _, dep := range node.dependencies {
 			resolved, _ := isDependencyResolved(dep)
+			// Debug: 检查特定单元格的依赖解析
+			if debugCells2[cell] {
+				log.Printf("  🔍 [DEBUG Level0] %s 依赖 %s: resolved=%v", cell, dep, resolved)
+			}
 			if !resolved {
 				hasDeps = true
 				break
@@ -259,6 +320,9 @@ func (g *dependencyGraph) assignLevels() {
 
 		if !hasDeps {
 			level0Candidates = append(level0Candidates, cell)
+			if debugCells2[cell] {
+				log.Printf("  🔍 [DEBUG Level0] %s 被标记为 Level 0 候选！", cell)
+			}
 		}
 	}
 
@@ -389,6 +453,28 @@ func (g *dependencyGraph) mergeLevels() {
 	// 规则：如果Level i的任何公式依赖于Level j的公式（j < i），
 	//       则Level i 不能和 Level j 或更早的级别合并
 
+	// 构建 column -> max level 映射，用于解析虚拟列依赖
+	columnMaxOrigLevel := make(map[string]int) // "Sheet!Col" -> max original level
+	for levelIdx, cells := range g.levels {
+		for _, cell := range cells {
+			parts := strings.Split(cell, "!")
+			if len(parts) == 2 {
+				col := ""
+				for _, ch := range parts[1] {
+					if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+						col += string(ch)
+					} else {
+						break
+					}
+				}
+				colKey := parts[0] + "!" + col
+				if levelIdx > columnMaxOrigLevel[colKey] {
+					columnMaxOrigLevel[colKey] = levelIdx
+				}
+			}
+		}
+	}
+
 	merged := make([][]string, 0)
 	processed := make(map[int]bool) // 已处理的原始级别
 
@@ -413,7 +499,17 @@ func (g *dependencyGraph) mergeLevels() {
 			for _, cell := range g.levels[nextLevel] {
 				node := g.nodes[cell]
 				for _, dep := range node.dependencies {
-					depOrigLevel, exists := cellToOriginalLevel[dep]
+					var depOrigLevel int
+					var exists bool
+
+					// 处理虚拟列依赖 (COLUMN:Sheet!Col)
+					if strings.HasPrefix(dep, "COLUMN:") {
+						colKey := strings.TrimPrefix(dep, "COLUMN:")
+						depOrigLevel, exists = columnMaxOrigLevel[colKey]
+					} else {
+						depOrigLevel, exists = cellToOriginalLevel[dep]
+					}
+
 					if !exists {
 						continue // 数据单元格，不影响
 					}
@@ -1353,6 +1449,17 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		levelStart := time.Now()
 		log.Printf("\n🔄 [Level %d] Processing %d formulas", levelIdx, len(levelCells))
 
+		// Debug: 检查这个 level 是否包含 补货汇总!I 或 补货汇总!J 列的公式
+		buhuoHuizongCount := 0
+		for _, cell := range levelCells {
+			if strings.HasPrefix(cell, "补货汇总!I") || strings.HasPrefix(cell, "补货汇总!J") {
+				buhuoHuizongCount++
+			}
+		}
+		if buhuoHuizongCount > 0 {
+			log.Printf("  🎯 [Level %d DEBUG] 包含 %d 个 补货汇总!I/J 列公式", levelIdx, buhuoHuizongCount)
+		}
+
 		// ========================================
 		// 步骤1：自动检测并预读取列范围模式
 		// ========================================
@@ -1623,6 +1730,17 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 
 	collectDuration := time.Since(collectStart)
 
+	// Debug: 检查 补货汇总!I 列的公式是否被识别
+	buhuoHuizongIndexMatch := 0
+	for cell := range indexMatchFormulas {
+		if strings.HasPrefix(cell, "补货汇总!I") || strings.HasPrefix(cell, "补货汇总!J") {
+			buhuoHuizongIndexMatch++
+		}
+	}
+	if buhuoHuizongIndexMatch > 0 {
+		log.Printf("  🎯 [Level %d DEBUG] indexMatchFormulas 包含 %d 个 补货汇总!I/J 公式", levelIdx, buhuoHuizongIndexMatch)
+	}
+
 	// 如果没有 SUMIFS 和 INDEX-MATCH，直接返回空缓存
 	if len(pureSUMIFS) == 0 && len(uniqueSUMIFSExprs) == 0 && len(indexMatchFormulas) == 0 {
 		return subExprCache
@@ -1830,15 +1948,22 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			cleanExpr := strings.TrimSpace(indexMatchExpr)
 			parts := strings.Split(cell, "!")
 
+			// Debug: 检查特定单元格的值
+			if strings.HasPrefix(cell, "补货汇总!I") && len(cell) <= 20 {
+				log.Printf("  🔍 [DEBUG INDEX-MATCH] %s: value='%s', cleanFormula='%s', cleanExpr='%s'", cell, value, cleanFormula, cleanExpr)
+			}
+
 			// 只有纯 INDEX-MATCH 公式才存入 worksheetCache 和 calcCache
 			// 复合公式（如 IF(IFERROR(INDEX-MATCH...),0)=0,"断货",SUMIFS(...))）
 			// 只把 INDEX-MATCH 子表达式结果存入 subExprCache，让 DAG scheduler 重新计算完整公式
 			if cleanFormula == cleanExpr || cleanFormula == "IFERROR("+cleanExpr {
-				// 纯 INDEX-MATCH - 存入 worksheetCache 和 calcCache
+				// 纯 INDEX-MATCH - 存入 worksheetCache 和 calcCache，并写入 worksheet
 				if len(parts) == 2 {
 					cellType, _ := f.GetCellType(parts[0], parts[1])
 					arg := inferCellValueType(value, cellType)
 					worksheetCache.Set(parts[0], parts[1], arg)
+					// 关键修复：写入实际的 worksheet 数据结构
+					f.setFormulaValue(parts[0], parts[1], value)
 				}
 				cacheKey := cell + "!raw=true"
 				f.calcCache.Store(cacheKey, value)

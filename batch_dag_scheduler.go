@@ -377,6 +377,7 @@ func (f *File) setFormulaValue(sheet, cellName, value string) {
 	ws, err := f.workSheetReader(sheet)
 	f.mu.Unlock()
 	if err != nil {
+		log.Printf("  ⚠️  [setFormulaValue] workSheetReader failed for %s!%s: %v", sheet, cellName, err)
 		return
 	}
 
@@ -385,6 +386,7 @@ func (f *File) setFormulaValue(sheet, cellName, value string) {
 
 	c, _, _, err := ws.prepareCell(cellName)
 	if err != nil {
+		log.Printf("  ⚠️  [setFormulaValue] prepareCell failed for %s!%s: %v", sheet, cellName, err)
 		return
 	}
 

@@ -1040,6 +1040,24 @@ func (f *File) convertCacheToRows(sheetData map[string]formulaArg) [][]string {
 func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, worksheetCache *WorksheetCache) map[string]string {
 	results := make(map[string]string)
 
+	// Debug: 检查传入的公式
+	buhuoCount := 0
+	buhuoJihuaCount := 0
+	for cell, formula := range formulas {
+		if strings.HasPrefix(cell, "补货汇总!I") || strings.HasPrefix(cell, "补货汇总!J") {
+			buhuoCount++
+			if strings.Contains(formula, "补货计划!") {
+				buhuoJihuaCount++
+			}
+			if buhuoCount <= 2 {
+				log.Printf("  🔍 [INDEX-MATCH Input] %s = %s", cell, formula)
+			}
+		}
+	}
+	if buhuoCount > 0 {
+		log.Printf("  🔍 [INDEX-MATCH Input] Total 补货汇总!I/J formulas: %d (引用补货计划: %d)", buhuoCount, buhuoJihuaCount)
+	}
+
 	// Group formulas by pattern
 	patterns1D := make(map[string]*indexMatch1DPattern)
 	patterns2D := make(map[string]*indexMatch2DPattern)
@@ -1099,6 +1117,23 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 	log.Printf("    🔍 [INDEX-MATCH] Found %d AVERAGE+INDEX-MATCH, %d 1D, %d 2D patterns",
 		len(patternsAvg), len(patterns1D), len(patterns2D))
 
+	// Debug: 显示 1D pattern keys
+	buhuoJihuaPatterns := 0
+	for key, pattern := range patterns1D {
+		if strings.Contains(key, "补货计划") {
+			buhuoJihuaPatterns++
+			log.Printf("    🔍 [INDEX-MATCH 1D 补货计划] key='%s', arrayRange='%s', matchRange='%s', formulas=%d",
+				key, pattern.arrayRange, pattern.matchRange, len(pattern.formulas))
+		}
+	}
+	if buhuoCount > 0 && buhuoJihuaPatterns == 0 {
+		log.Printf("    ⚠️  [INDEX-MATCH 1D] 有 %d 个补货汇总!I/J 公式但没有提取出补货计划 pattern！", buhuoCount)
+		// 显示实际提取出的 patterns
+		for key := range patterns1D {
+			log.Printf("    ⚠️  实际 pattern key: %s", key)
+		}
+	}
+
 	// Calculate AVERAGE+INDEX-MATCH patterns (use worksheetCache for recalculated values)
 	for _, pattern := range patternsAvg {
 		patternResults := f.calculateAverageIndexMatchPatternWithCache(pattern, worksheetCache)
@@ -1152,7 +1187,9 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 	startCol := colParts[0]
 	endCol := colParts[1]
 
-	// Read data: First try worksheetCache, then fallback to file + merge cached results
+	// CRITICAL FIX: Always read from file first, then merge cached formula results
+	// The worksheetCache only contains formula calculation results, NOT original data.
+	// For INDEX-MATCH, we need the original data (e.g., A column for MATCH lookup)
 	sheetData := worksheetCache.GetSheet(sourceSheet)
 
 	// Build lookup maps
@@ -1160,38 +1197,15 @@ func (f *File) calculateINDEXMATCH2DPatternWithCache(pattern *indexMatch2DPatter
 	matchCol1Idx, _ := ColumnNameToNumber(matchCol1)
 	matchCol1Idx--
 
-	// Check if worksheetCache has enough data (at least has match column data)
-	hasEnoughData := len(sheetData) > 0
-	if hasEnoughData {
-		matchColName, _ := ColumnNumberToName(matchCol1Idx + 1)
-		foundMatchCol := false
-		for cellRef := range sheetData {
-			col, _, err := CellNameToCoordinates(cellRef)
-			if err == nil && col == matchCol1Idx+1 {
-				foundMatchCol = true
-				break
-			}
-			if strings.HasPrefix(cellRef, matchColName) {
-				foundMatchCol = true
-				break
-			}
-		}
-		hasEnoughData = foundMatchCol
+	// Always read from file to get original data
+	fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil || len(fileRows) == 0 {
+		return results
 	}
+	rows := fileRows
 
-	var rows [][]string
-	if hasEnoughData {
-		// Use cache data
-		rows = f.convertCacheToRows(sheetData)
-	} else {
-		// Fallback: Read from file directly
-		fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
-		if err != nil || len(fileRows) == 0 {
-			return results
-		}
-		rows = fileRows
-
-		// Merge cached formula results into rows
+	// Merge cached formula results into rows
+	if len(sheetData) > 0 {
 		for cellRef, argValue := range sheetData {
 			col, row, err := CellNameToCoordinates(cellRef)
 			if err != nil {
@@ -1330,6 +1344,12 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 		return results
 	}
 
+	// Debug: 检查是否是补货计划
+	isBuhuoJihua := strings.Contains(sourceSheet, "补货计划")
+	if isBuhuoJihua {
+		log.Printf("  🔍 [1D Pattern 补货计划] Starting calculation for %s, formulas=%d", pattern.arrayRange, len(pattern.formulas))
+	}
+
 	arrayParts := strings.Split(pattern.arrayRange, "!")
 	if len(arrayParts) != 2 {
 		return results
@@ -1349,45 +1369,27 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 	matchColIdx, _ := ColumnNameToNumber(matchCol)
 	matchColIdx--
 
-	// Read data: First try worksheetCache, then fallback to file + merge cached results
+	// CRITICAL FIX: Always read from file first, then merge cached formula results
+	// The worksheetCache only contains formula calculation results, NOT original data.
+	// For INDEX-MATCH, we need the original data (e.g., A column for MATCH lookup)
+	// which is pure data and will never be in worksheetCache.
 	sheetData := worksheetCache.GetSheet(sourceSheet)
 
-	// Check if worksheetCache has enough data (at least has match column data)
-	hasEnoughData := len(sheetData) > 0
-	if hasEnoughData {
-		// Check if we have match column data
-		matchColName, _ := ColumnNumberToName(matchColIdx + 1)
-		foundMatchCol := false
-		for cellRef := range sheetData {
-			col, _, err := CellNameToCoordinates(cellRef)
-			if err == nil && col == matchColIdx+1 {
-				foundMatchCol = true
-				break
-			}
-			// Also check by column name prefix
-			if strings.HasPrefix(cellRef, matchColName) {
-				foundMatchCol = true
-				break
-			}
-		}
-		hasEnoughData = foundMatchCol
+	// Always read from file to get original data
+	fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil || len(fileRows) == 0 {
+		return results
+	}
+	rows := fileRows
+
+	if isBuhuoJihua {
+		log.Printf("  🔍 [1D Pattern 补货计划] Read FILE data: rows=%d, cached formulas=%d", len(rows), len(sheetData))
 	}
 
-	var rows [][]string
-	if hasEnoughData {
-		// Use cache data
-		rows = f.convertCacheToRows(sheetData)
-	} else {
-		// Fallback: Read from file directly
-		fileRows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
-		if err != nil || len(fileRows) == 0 {
-			return results
-		}
-		rows = fileRows
-
-		// Merge cached formula results into rows
-		// This is important: if worksheetCache has calculated values,
-		// we need to override the file's original values
+	// Merge cached formula results into rows
+	// This ensures we use calculated values for formula columns (e.g., G column)
+	// while keeping original data for data columns (e.g., A column for MATCH lookup)
+	if len(sheetData) > 0 {
 		for cellRef, argValue := range sheetData {
 			col, row, err := CellNameToCoordinates(cellRef)
 			if err != nil {
@@ -1407,18 +1409,38 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 
 	// Build lookup map
 	lookupMap := make(map[string]int)
+	emptyCount := 0
 	if matchColIdx >= 0 {
 		for rowIdx, row := range rows {
 			if matchColIdx < len(row) {
 				value := row[matchColIdx]
 				if value != "" {
 					lookupMap[value] = rowIdx
+				} else {
+					emptyCount++
 				}
+			} else {
+				emptyCount++
+			}
+		}
+	}
+
+	// Debug: 检查 lookupMap 大小
+	if isBuhuoJihua {
+		log.Printf("  🔍 [1D Pattern 补货计划] sourceSheet=%s, rows=%d, matchColIdx=%d, arrayColIdx=%d, lookupMap size=%d, emptyCount=%d",
+			sourceSheet, len(rows), matchColIdx, arrayColIdx, len(lookupMap), emptyCount)
+		// 显示前几行的内容
+		for rowIdx := 0; rowIdx < 5 && rowIdx < len(rows); rowIdx++ {
+			if len(rows[rowIdx]) > 0 {
+				log.Printf("    rows[%d]: len=%d, col0='%s'", rowIdx, len(rows[rowIdx]), rows[rowIdx][0])
+			} else {
+				log.Printf("    rows[%d]: empty row", rowIdx)
 			}
 		}
 	}
 
 	// Calculate results
+	notFoundCount := 0
 	for fullCell, info := range pattern.formulas {
 		lookupCell := strings.ReplaceAll(info.lookupCell, "$", "")
 		lookupValue := f.getCellValueOrCalcCache(info.sheet, lookupCell, worksheetCache)
@@ -1431,7 +1453,16 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 			}
 		} else {
 			results[fullCell] = ""
+			notFoundCount++
+			// Debug: 检查前几个未找到的
+			if notFoundCount <= 3 && isBuhuoJihua {
+				log.Printf("  🔍 [1D Pattern 补货计划] NOT FOUND: %s, lookupCell=%s (%s), lookupValue='%s'", fullCell, lookupCell, info.sheet, lookupValue)
+			}
 		}
+	}
+
+	if notFoundCount > 0 && isBuhuoJihua {
+		log.Printf("  ⚠️  [1D Pattern 补货计划] %d/%d formulas had no match in lookupMap", notFoundCount, len(pattern.formulas))
 	}
 
 	return results
