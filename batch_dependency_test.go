@@ -118,6 +118,260 @@ func containsDep(deps []string, want string) bool {
 	return false
 }
 
+// TestRecalculateAffectedByCells tests the incremental recalculation API
+func TestRecalculateAffectedByCells(t *testing.T) {
+	t.Run("DirectDependency", func(t *testing.T) {
+		f := NewFile()
+
+		// Set initial values and formula
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		if b1Before != "20" {
+			t.Fatalf("expected B1=20 before update, got %s", b1Before)
+		}
+
+		// Update A1 and use incremental recalculation
+		f.SetCellValue("Sheet1", "A1", 50)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify B1 was recalculated correctly
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "100" {
+			t.Errorf("expected B1=100 after update, got %s", b1After)
+		}
+	})
+
+	t.Run("CrossSheetDependency", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+
+		// Data sheet has source values
+		f.SetCellValue("Data", "A1", 100)
+
+		// Sheet1 references Data sheet
+		f.SetCellFormula("Sheet1", "B1", "=Data!A1*3")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		if b1Before != "300" {
+			t.Fatalf("expected Sheet1!B1=300 before update, got %s", b1Before)
+		}
+
+		// Update Data!A1 and use incremental recalculation
+		f.SetCellValue("Data", "A1", 200)
+
+		updatedCells := map[string]bool{
+			"Data!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify Sheet1!B1 was recalculated correctly
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "600" {
+			t.Errorf("expected Sheet1!B1=600 after update, got %s", b1After)
+		}
+	})
+
+	t.Run("ChainDependency", func(t *testing.T) {
+		f := NewFile()
+
+		// Create chain dependency: A1 -> B1 -> C1 -> D1
+		f.SetCellValue("Sheet1", "A1", 1)
+		f.SetCellFormula("Sheet1", "B1", "=A1+1")
+		f.SetCellFormula("Sheet1", "C1", "=B1+1")
+		f.SetCellFormula("Sheet1", "D1", "=C1+1")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		d1Before, _ := f.GetCellValue("Sheet1", "D1")
+		if d1Before != "4" {
+			t.Fatalf("expected D1=4 before update, got %s", d1Before)
+		}
+
+		// Update A1 and use incremental recalculation
+		f.SetCellValue("Sheet1", "A1", 10)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify entire chain was recalculated correctly
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+
+		if b1 != "11" {
+			t.Errorf("expected B1=11, got %s", b1)
+		}
+		if c1 != "12" {
+			t.Errorf("expected C1=12, got %s", c1)
+		}
+		if d1 != "13" {
+			t.Errorf("expected D1=13, got %s", d1)
+		}
+	})
+
+	t.Run("MultipleUpdates", func(t *testing.T) {
+		f := NewFile()
+
+		// Set initial values and formulas
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellValue("Sheet1", "A2", 20)
+		f.SetCellFormula("Sheet1", "B1", "=A1+A2")
+		f.SetCellFormula("Sheet1", "C1", "=A1*A2")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		c1Before, _ := f.GetCellValue("Sheet1", "C1")
+		if b1Before != "30" || c1Before != "200" {
+			t.Fatalf("expected B1=30, C1=200 before update, got B1=%s, C1=%s", b1Before, c1Before)
+		}
+
+		// Update both A1 and A2
+		f.SetCellValue("Sheet1", "A1", 100)
+		f.SetCellValue("Sheet1", "A2", 200)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+			"Sheet1!A2": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify both formulas were recalculated correctly
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		c1After, _ := f.GetCellValue("Sheet1", "C1")
+
+		if b1After != "300" {
+			t.Errorf("expected B1=300 after update, got %s", b1After)
+		}
+		if c1After != "20000" {
+			t.Errorf("expected C1=20000 after update, got %s", c1After)
+		}
+	})
+
+	t.Run("UnaffectedCellsUnchanged", func(t *testing.T) {
+		f := NewFile()
+
+		// Set up two independent formula chains
+		// Chain 1: A1 -> B1
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+
+		// Chain 2: C1 -> D1 (independent)
+		f.SetCellValue("Sheet1", "C1", 100)
+		f.SetCellFormula("Sheet1", "D1", "=C1*2")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		d1Before, _ := f.GetCellValue("Sheet1", "D1")
+		if b1Before != "20" || d1Before != "200" {
+			t.Fatalf("expected B1=20, D1=200 before update, got B1=%s, D1=%s", b1Before, d1Before)
+		}
+
+		// Update only A1 (should not affect D1)
+		f.SetCellValue("Sheet1", "A1", 50)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify B1 was recalculated
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "100" {
+			t.Errorf("expected B1=100 after update, got %s", b1After)
+		}
+
+		// Verify D1 is unchanged (still 200)
+		d1After, _ := f.GetCellValue("Sheet1", "D1")
+		if d1After != "200" {
+			t.Errorf("expected D1=200 (unchanged), got %s", d1After)
+		}
+	})
+
+	t.Run("EmptyUpdates", func(t *testing.T) {
+		f := NewFile()
+
+		// Empty updates should return nil without error
+		err := f.RecalculateAffectedByCells(nil)
+		if err != nil {
+			t.Fatalf("empty updates should not fail: %v", err)
+		}
+
+		err = f.RecalculateAffectedByCells(map[string]bool{})
+		if err != nil {
+			t.Fatalf("empty map should not fail: %v", err)
+		}
+	})
+
+	t.Run("SUMFormula", func(t *testing.T) {
+		f := NewFile()
+
+		// Set up SUM formula
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellValue("Sheet1", "A2", 20)
+		f.SetCellValue("Sheet1", "A3", 30)
+		f.SetCellFormula("Sheet1", "B1", "=SUM(A1:A3)")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		if b1Before != "60" {
+			t.Fatalf("expected B1=60 before update, got %s", b1Before)
+		}
+
+		// Update A2
+		f.SetCellValue("Sheet1", "A2", 100)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A2": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify SUM was recalculated correctly
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "140" {
+			t.Errorf("expected B1=140 after update, got %s", b1After)
+		}
+	})
+}
+
 // TestBatchUpdateValuesAndFormulasWithRecalc tests the new incremental update API
 func TestBatchUpdateValuesAndFormulasWithRecalc(t *testing.T) {
 	t.Run("BasicFunctionality", func(t *testing.T) {

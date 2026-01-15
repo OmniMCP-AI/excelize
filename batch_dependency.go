@@ -720,19 +720,30 @@ func extractDependenciesOptimized(formula, currentSheet, currentCell string, col
 					startCol, endCol = endCol, startCol
 				}
 
-				// For small ranges (<= 100 cells), expand normally
+				// For small ranges (<= 100 cells), expand all cells
 				rangeSize := (endRow - startRow + 1) * (endCol - startCol + 1)
 				if rangeSize <= 100 {
-					for col := startCol; col <= endCol; col++ {
-						colName, _ := ColumnNumberToName(col)
-						key := sheetName + "!" + colName
-						if formulas, exists := columnIndex[key]; exists {
-							for _, formulaCell := range formulas {
-								parts := strings.Split(formulaCell, "!")
-								if len(parts) == 2 {
-									_, row, err := CellNameToCoordinates(parts[1])
-									if err == nil && row >= startRow && row <= endRow {
-										deps[formulaCell] = true
+					// If columnIndex is nil, expand all cells in range (for incremental recalc)
+					if columnIndex == nil {
+						for col := startCol; col <= endCol; col++ {
+							for row := startRow; row <= endRow; row++ {
+								cellRef, _ := CoordinatesToCellName(col, row)
+								deps[sheetName+"!"+cellRef] = true
+							}
+						}
+					} else {
+						// If columnIndex exists, only add formula cells
+						for col := startCol; col <= endCol; col++ {
+							colName, _ := ColumnNumberToName(col)
+							key := sheetName + "!" + colName
+							if formulas, exists := columnIndex[key]; exists {
+								for _, formulaCell := range formulas {
+									parts := strings.Split(formulaCell, "!")
+									if len(parts) == 2 {
+										_, row, err := CellNameToCoordinates(parts[1])
+										if err == nil && row >= startRow && row <= endRow {
+											deps[formulaCell] = true
+										}
 									}
 								}
 							}
@@ -2267,4 +2278,636 @@ func (f *File) preCalculateSimpleFormulas(levelCells []string, graph *dependency
 
 	wg.Wait()
 	return calculatedCount
+}
+
+// RecalculateAffectedByColumns 增量重算：只计算依赖于指定列的公式
+// 这是 BatchUpdateValuesAndFormulasWithRecalc 的核心优化
+//
+// 参数：
+//
+//	updatedColumns: 被更新的列，格式 "Sheet!Col" -> true
+//
+// 工作原理：
+//  1. 构建完整依赖图（只做一次）
+//  2. 通过 BFS 找出所有依赖于更新列的公式（传播依赖）
+//  3. 过滤依赖图，只保留受影响的公式
+//  4. 复用 calculateByDAG 进行分层并行计算
+func (f *File) RecalculateAffectedByColumns(updatedColumns map[string]bool) error {
+	if len(updatedColumns) == 0 {
+		return nil
+	}
+
+	f.recalcMu.Lock()
+	defer f.recalcMu.Unlock()
+
+	log.Printf("📊 [IncrementalRecalc] Starting incremental recalculation")
+	log.Printf("  📋 Updated columns: %v", updatedColumns)
+	startTime := time.Now()
+
+	// ========================================
+	// 步骤1：构建完整依赖图
+	// ========================================
+	graph := f.buildDependencyGraph()
+	if len(graph.nodes) == 0 {
+		log.Printf("  ⚠️  No formulas found, skipping recalculation")
+		return nil
+	}
+
+	// ========================================
+	// 步骤2：找出所有受影响的公式（BFS传播）
+	// ========================================
+	affectedCells := f.findAffectedCellsByColumns(graph, updatedColumns)
+	log.Printf("  📊 Found %d affected formulas (out of %d total)", len(affectedCells), len(graph.nodes))
+
+	if len(affectedCells) == 0 {
+		log.Printf("  ✅ No affected formulas, skipping recalculation")
+		return nil
+	}
+
+	// 如果受影响的公式超过50%，直接全量重算更快
+	if float64(len(affectedCells)) > float64(len(graph.nodes))*0.5 {
+		log.Printf("  ⚠️  Too many affected formulas (%.1f%%), using full graph for calculation",
+			float64(len(affectedCells))/float64(len(graph.nodes))*100)
+		// 直接使用已构建的 graph 进行计算，避免重复构建和死锁
+		// 清除所有缓存
+		f.calcCache.Range(func(key, value interface{}) bool {
+			f.calcCache.Delete(key)
+			return true
+		})
+		f.rangeCache.Clear()
+		f.calculateByDAG(graph)
+		duration := time.Since(startTime)
+		log.Printf("✅ [IncrementalRecalc] Completed (full) in %v", duration)
+		return nil
+	}
+
+	// ========================================
+	// 步骤3：过滤依赖图，只保留受影响的公式
+	// ========================================
+	filteredGraph := f.filterDependencyGraph(graph, affectedCells)
+	log.Printf("  📊 Filtered graph: %d formulas, %d levels", len(filteredGraph.nodes), len(filteredGraph.levels))
+
+	// ========================================
+	// 步骤4：只清除受影响公式的缓存
+	// ========================================
+	for cell := range affectedCells {
+		cacheKey := cell + "!raw=false"
+		f.calcCache.Delete(cacheKey)
+		cacheKeyRaw := cell + "!raw=true"
+		f.calcCache.Delete(cacheKeyRaw)
+	}
+
+	// ========================================
+	// 步骤5：使用 DAG 分层并行计算
+	// ========================================
+	f.calculateByDAG(filteredGraph)
+
+	duration := time.Since(startTime)
+	log.Printf("✅ [IncrementalRecalc] Completed in %v (calculated %d formulas)", duration, len(affectedCells))
+	return nil
+}
+
+// findAffectedCellsByColumns 通过 BFS 找出所有依赖于更新列的公式
+func (f *File) findAffectedCellsByColumns(graph *dependencyGraph, updatedColumns map[string]bool) map[string]bool {
+	affected := make(map[string]bool)
+
+	// 构建反向依赖：谁依赖于这个单元格/列
+	// reverseDeps[cellOrCol] = 依赖于它的公式列表
+	reverseDeps := make(map[string][]string)
+
+	for cell, node := range graph.nodes {
+		for _, dep := range node.dependencies {
+			// dep 可能是 "Sheet!Cell" 或 "COLUMN:Sheet!Col"
+			reverseDeps[dep] = append(reverseDeps[dep], cell)
+
+			// 也建立列级别的反向依赖
+			if !strings.HasPrefix(dep, "COLUMN:") {
+				parts := strings.SplitN(dep, "!", 2)
+				if len(parts) == 2 {
+					col, _, err := CellNameToCoordinates(parts[1])
+					if err == nil {
+						colName, _ := ColumnNumberToName(col)
+						colKey := "COLUMN:" + parts[0] + "!" + colName
+						reverseDeps[colKey] = append(reverseDeps[colKey], cell)
+					}
+				}
+			}
+		}
+	}
+
+	// BFS: 从更新的列开始，找出所有受影响的公式
+	queue := make([]string, 0, 1000)
+
+	// 初始化队列：添加直接依赖于更新列的公式
+	for updatedCol := range updatedColumns {
+		colKey := "COLUMN:" + updatedCol
+		for _, cell := range reverseDeps[colKey] {
+			if !affected[cell] {
+				affected[cell] = true
+				queue = append(queue, cell)
+			}
+		}
+
+		// 也检查直接单元格依赖（如果有公式直接引用该列的某个单元格）
+		// 遍历该列所有行
+		parts := strings.SplitN(updatedCol, "!", 2)
+		if len(parts) == 2 {
+			sheet, colName := parts[0], parts[1]
+			// 找出该列所有被引用的单元格
+			for dep := range reverseDeps {
+				if strings.HasPrefix(dep, sheet+"!"+colName) {
+					for _, cell := range reverseDeps[dep] {
+						if !affected[cell] {
+							affected[cell] = true
+							queue = append(queue, cell)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// BFS 传播
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// 找出依赖于 current 的公式
+		for _, dep := range reverseDeps[current] {
+			if !affected[dep] {
+				affected[dep] = true
+				queue = append(queue, dep)
+			}
+		}
+
+		// 也检查列级别依赖
+		parts := strings.SplitN(current, "!", 2)
+		if len(parts) == 2 {
+			col, _, err := CellNameToCoordinates(parts[1])
+			if err == nil {
+				colName, _ := ColumnNumberToName(col)
+				colKey := "COLUMN:" + parts[0] + "!" + colName
+				for _, dep := range reverseDeps[colKey] {
+					if !affected[dep] {
+						affected[dep] = true
+						queue = append(queue, dep)
+					}
+				}
+			}
+		}
+	}
+
+	return affected
+}
+
+// filterDependencyGraph 过滤依赖图，只保留受影响的公式
+func (f *File) filterDependencyGraph(graph *dependencyGraph, affectedCells map[string]bool) *dependencyGraph {
+	filtered := &dependencyGraph{
+		nodes:          make(map[string]*formulaNode),
+		columnMetadata: graph.columnMetadata, // 复用列元数据
+	}
+
+	// 只复制受影响的节点
+	for cell := range affectedCells {
+		if node, exists := graph.nodes[cell]; exists {
+			// 深拷贝节点
+			filteredNode := &formulaNode{
+				cell:         node.cell,
+				formula:      node.formula,
+				dependencies: make([]string, len(node.dependencies)),
+				level:        -1, // 需要重新计算 level
+			}
+			copy(filteredNode.dependencies, node.dependencies)
+			filtered.nodes[cell] = filteredNode
+		}
+	}
+
+	// 重新分配层级
+	filtered.assignLevels()
+
+	return filtered
+}
+
+// RecalculateAffectedByCells 增量重算：只计算依赖于指定单元格的公式
+// 比 RecalculateAffectedByColumns 更精确，适用于少量单元格更新的场景
+//
+// 优化策略：
+// 1. 不构建完整依赖图（避免 O(n) 遍历所有公式）
+// 2. 直接扫描工作表，同时构建反向依赖和公式元数据
+// 3. 使用 BFS 找出受影响的公式
+// 4. 只为受影响的公式构建小型依赖图
+//
+// 参数：
+//
+//	updatedCells: 被更新的单元格，格式 "Sheet!Cell" -> true
+func (f *File) RecalculateAffectedByCells(updatedCells map[string]bool) error {
+	if len(updatedCells) == 0 {
+		return nil
+	}
+
+	f.recalcMu.Lock()
+	defer f.recalcMu.Unlock()
+
+	log.Printf("📊 [IncrementalRecalc] Starting optimized cell-level incremental recalculation")
+	log.Printf("  📋 Updated cells: %d cells", len(updatedCells))
+	for cell := range updatedCells {
+		log.Printf("    - %s", cell)
+		if len(updatedCells) > 5 {
+			log.Printf("    ... and %d more", len(updatedCells)-5)
+			break
+		}
+	}
+	startTime := time.Now()
+
+	// ========================================
+	// 步骤1：解析更新单元格的列信息
+	// ========================================
+	updatedCellsByCol := make(map[string]map[int]bool) // "Sheet!Col" -> row numbers
+	for cell := range updatedCells {
+		parts := strings.SplitN(cell, "!", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sheet, cellRef := parts[0], parts[1]
+		col, row, err := CellNameToCoordinates(cellRef)
+		if err != nil {
+			continue
+		}
+		colName, _ := ColumnNumberToName(col)
+		colKey := sheet + "!" + colName
+		if updatedCellsByCol[colKey] == nil {
+			updatedCellsByCol[colKey] = make(map[int]bool)
+		}
+		updatedCellsByCol[colKey][row] = true
+	}
+
+	// ========================================
+	// 步骤2：一次遍历构建反向依赖和公式元数据
+	// ========================================
+	scanStart := time.Now()
+	reverseDeps := make(map[string][]string)    // cell -> formulas that depend on it
+	reverseColDeps := make(map[string][]string) // COLUMN:col -> formulas that depend on it
+	formulaMap := make(map[string]string)       // cell -> formula content
+	columnMetadata := make(map[string]*columnMeta)
+	totalFormulas := 0
+
+	sheetList := f.GetSheetList()
+	for _, sheet := range sheetList {
+		ws, err := f.workSheetReader(sheet)
+		if err != nil || ws == nil || ws.SheetData.Row == nil {
+			continue
+		}
+
+		for _, row := range ws.SheetData.Row {
+			for _, cell := range row.C {
+				// 提取列和行信息
+				col, rowNum, err := CellNameToCoordinates(cell.R)
+				if err != nil {
+					continue
+				}
+				colName, _ := ColumnNumberToName(col)
+				colKey := sheet + "!" + colName
+
+				// 初始化列元数据
+				if columnMetadata[colKey] == nil {
+					columnMetadata[colKey] = &columnMeta{
+						hasFormulas: false,
+						formulaRows: nil,
+						maxRow:      0,
+					}
+				}
+				meta := columnMetadata[colKey]
+				if rowNum > meta.maxRow {
+					meta.maxRow = rowNum
+				}
+
+				if cell.F == nil {
+					continue
+				}
+
+				formula := cell.F.Content
+				if formula == "" && cell.F.T == STCellFormulaTypeShared && cell.F.Si != nil {
+					formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
+				}
+				if formula == "" {
+					continue
+				}
+
+				fullCell := sheet + "!" + cell.R
+				formulaMap[fullCell] = formula
+				totalFormulas++
+
+				// 标记列有公式
+				meta.hasFormulas = true
+				if meta.formulaRows == nil {
+					meta.formulaRows = make(map[int]bool)
+				}
+				meta.formulaRows[rowNum] = true
+
+				// 提取依赖并构建反向索引
+				deps := extractDependenciesOptimized(formula, sheet, cell.R, nil, columnMetadata)
+				for _, dep := range deps {
+					if strings.HasPrefix(dep, "COLUMN:") {
+						reverseColDeps[dep] = append(reverseColDeps[dep], fullCell)
+					} else {
+						reverseDeps[dep] = append(reverseDeps[dep], fullCell)
+					}
+				}
+			}
+		}
+	}
+	scanDuration := time.Since(scanStart)
+	log.Printf("  📊 [Scan] Scanned %d formulas in %v", totalFormulas, scanDuration)
+
+	if totalFormulas == 0 {
+		log.Printf("  ⚠️  No formulas found, skipping recalculation")
+		return nil
+	}
+
+	// ========================================
+	// 步骤3：使用 BFS 找出受影响的公式
+	// 完整的 BFS 传播确保所有依赖链都被正确追踪
+	// ========================================
+	bfsStart := time.Now()
+	affected := make(map[string]bool, len(formulaMap)/2)
+
+	// 预计算 cell -> colKey 映射，避免在 BFS 循环中重复计算
+	cellToColKey := make(map[string]string, len(formulaMap))
+	for cell := range formulaMap {
+		parts := strings.SplitN(cell, "!", 2)
+		if len(parts) == 2 {
+			cellCol := ""
+			for _, ch := range parts[1] {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					cellCol += string(ch)
+				} else {
+					break
+				}
+			}
+			if cellCol != "" {
+				cellToColKey[cell] = "COLUMN:" + parts[0] + "!" + cellCol
+			}
+		}
+	}
+
+	// 使用双缓冲区 BFS：避免在迭代过程中修改队列
+	currentQueue := make([]string, 0, 1000)
+	nextQueue := make([]string, 0, 1000)
+
+	// 第一轮：找出直接受影响的公式
+	for cell := range updatedCells {
+		for _, formula := range reverseDeps[cell] {
+			if !affected[formula] {
+				affected[formula] = true
+				currentQueue = append(currentQueue, formula)
+			}
+		}
+	}
+
+	// 检查列范围依赖
+	for colKey := range updatedCellsByCol {
+		colDepKey := "COLUMN:" + colKey
+		for _, formula := range reverseColDeps[colDepKey] {
+			if !affected[formula] {
+				affected[formula] = true
+				currentQueue = append(currentQueue, formula)
+			}
+		}
+	}
+
+	// 完整 BFS 传播
+	iterations := 0
+	for len(currentQueue) > 0 {
+		iterations++
+		nextQueue = nextQueue[:0] // 清空下一个队列
+
+		for _, current := range currentQueue {
+			// 找出直接依赖于 current 结果的公式
+			for _, dep := range reverseDeps[current] {
+				if !affected[dep] {
+					affected[dep] = true
+					nextQueue = append(nextQueue, dep)
+				}
+			}
+
+			// 检查列范围依赖
+			if colKey, ok := cellToColKey[current]; ok {
+				for _, dep := range reverseColDeps[colKey] {
+					if !affected[dep] {
+						affected[dep] = true
+						nextQueue = append(nextQueue, dep)
+					}
+				}
+			}
+		}
+
+		// 交换队列
+		currentQueue, nextQueue = nextQueue, currentQueue
+	}
+
+	bfsDuration := time.Since(bfsStart)
+	log.Printf("  📊 [BFS] Found %d affected formulas (%.1f%%) in %v (%d iterations)",
+		len(affected), float64(len(affected))/float64(totalFormulas)*100, bfsDuration, iterations)
+
+	if len(affected) == 0 {
+		log.Printf("  ✅ No affected formulas, skipping recalculation")
+		return nil
+	}
+
+	// 如果受影响的公式超过70%，直接全量重算
+	if float64(len(affected)) > float64(totalFormulas)*0.7 {
+		log.Printf("  ⚠️  Too many affected formulas (%.1f%%), falling back to full recalculation",
+			float64(len(affected))/float64(totalFormulas)*100)
+		// 构建完整依赖图并计算
+		graph := f.buildDependencyGraph()
+		f.calcCache.Range(func(key, value interface{}) bool {
+			f.calcCache.Delete(key)
+			return true
+		})
+		f.rangeCache.Clear()
+		f.calculateByDAG(graph)
+		duration := time.Since(startTime)
+		log.Printf("✅ [IncrementalRecalc] Completed (full) in %v", duration)
+		return nil
+	}
+
+	// ========================================
+	// 步骤4：为受影响的公式构建小型依赖图
+	// ========================================
+	graphStart := time.Now()
+	graph := &dependencyGraph{
+		nodes:          make(map[string]*formulaNode),
+		columnMetadata: columnMetadata,
+	}
+
+	// 构建列索引（只针对受影响公式的列）
+	columnIndex := make(map[string][]string)
+	for cellRef := range affected {
+		parts := strings.Split(cellRef, "!")
+		if len(parts) != 2 {
+			continue
+		}
+		sheetName := parts[0]
+		cell := parts[1]
+		cellCol := ""
+		for _, ch := range cell {
+			if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+				cellCol += string(ch)
+			} else {
+				break
+			}
+		}
+		if cellCol != "" {
+			key := sheetName + "!" + cellCol
+			columnIndex[key] = append(columnIndex[key], cellRef)
+		}
+	}
+
+	// 为每个受影响的公式创建节点
+	for cell := range affected {
+		formula, exists := formulaMap[cell]
+		if !exists {
+			continue
+		}
+
+		parts := strings.Split(cell, "!")
+		if len(parts) != 2 {
+			continue
+		}
+
+		deps := extractDependenciesOptimized(formula, parts[0], parts[1], columnIndex, columnMetadata)
+		graph.nodes[cell] = &formulaNode{
+			cell:         cell,
+			formula:      formula,
+			dependencies: deps,
+			level:        -1,
+		}
+	}
+
+	// 分配层级
+	graph.assignLevels()
+	graphDuration := time.Since(graphStart)
+	log.Printf("  📊 [Graph] Built filtered graph: %d formulas, %d levels in %v",
+		len(graph.nodes), len(graph.levels), graphDuration)
+
+	// ========================================
+	// 步骤5：清除受影响公式的缓存
+	// ========================================
+	for cell := range affected {
+		cacheKey := cell + "!raw=false"
+		f.calcCache.Delete(cacheKey)
+		cacheKeyRaw := cell + "!raw=true"
+		f.calcCache.Delete(cacheKeyRaw)
+	}
+
+	// ========================================
+	// 步骤6：使用 DAG 分层并行计算
+	// ========================================
+	f.calculateByDAG(graph)
+
+	duration := time.Since(startTime)
+	log.Printf("✅ [IncrementalRecalc] Completed in %v (calculated %d formulas)", duration, len(affected))
+	return nil
+}
+
+// findAffectedCellsByCells 精确找出依赖于更新单元格的公式
+// 只考虑：
+// 1. 直接引用该单元格的公式
+// 2. 引用包含该单元格的列范围的公式（如 $B:$B 包含 B2）
+func (f *File) findAffectedCellsByCells(graph *dependencyGraph, updatedCells map[string]bool) map[string]bool {
+	affected := make(map[string]bool)
+
+	// 解析更新单元格的列信息
+	updatedCellsByCol := make(map[string]map[int]bool) // "Sheet!Col" -> row numbers
+	for cell := range updatedCells {
+		parts := strings.SplitN(cell, "!", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sheet, cellRef := parts[0], parts[1]
+		col, row, err := CellNameToCoordinates(cellRef)
+		if err != nil {
+			continue
+		}
+		colName, _ := ColumnNumberToName(col)
+		colKey := sheet + "!" + colName
+		if updatedCellsByCol[colKey] == nil {
+			updatedCellsByCol[colKey] = make(map[int]bool)
+		}
+		updatedCellsByCol[colKey][row] = true
+	}
+
+	// 构建反向依赖
+	// reverseDeps["Sheet!Cell"] = 直接依赖于该单元格的公式
+	// reverseColDeps["COLUMN:Sheet!Col"] = 依赖于该列范围的公式
+	reverseDeps := make(map[string][]string)
+	reverseColDeps := make(map[string][]string)
+
+	for cell, node := range graph.nodes {
+		for _, dep := range node.dependencies {
+			if strings.HasPrefix(dep, "COLUMN:") {
+				// 列范围依赖
+				reverseColDeps[dep] = append(reverseColDeps[dep], cell)
+			} else {
+				// 单元格依赖
+				reverseDeps[dep] = append(reverseDeps[dep], cell)
+			}
+		}
+	}
+
+	// 第一轮：找出直接受影响的公式
+	for cell := range updatedCells {
+		// 直接引用该单元格的公式
+		for _, formula := range reverseDeps[cell] {
+			affected[formula] = true
+		}
+	}
+
+	// 检查列范围依赖
+	for colKey, rows := range updatedCellsByCol {
+		colDepKey := "COLUMN:" + colKey
+		for _, formula := range reverseColDeps[colDepKey] {
+			// 只有当列范围依赖确实可能受影响时才添加
+			// （列范围公式如 INDEX($B:$B, ...) 会受到任何 B 列单元格更新的影响）
+			affected[formula] = true
+			_ = rows // 列范围总是包含所有行
+		}
+	}
+
+	// BFS 传播：找出间接依赖
+	queue := make([]string, 0, len(affected))
+	for cell := range affected {
+		queue = append(queue, cell)
+	}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// 找出直接依赖于 current 结果的公式
+		for _, dep := range reverseDeps[current] {
+			if !affected[dep] {
+				affected[dep] = true
+				queue = append(queue, dep)
+			}
+		}
+
+		// 检查列范围依赖（如果 current 在某列，依赖该列范围的公式也受影响）
+		parts := strings.SplitN(current, "!", 2)
+		if len(parts) == 2 {
+			col, _, err := CellNameToCoordinates(parts[1])
+			if err == nil {
+				colName, _ := ColumnNumberToName(col)
+				colKey := "COLUMN:" + parts[0] + "!" + colName
+				for _, dep := range reverseColDeps[colKey] {
+					if !affected[dep] {
+						affected[dep] = true
+						queue = append(queue, dep)
+					}
+				}
+			}
+		}
+	}
+
+	return affected
 }
