@@ -682,23 +682,18 @@ func extractDependenciesOptimized(formula, currentSheet, currentCell string, col
 				!strings.ContainsAny(end, "0123456789")
 
 			if isColumnRange {
-				// OPTIMIZATION: Check column metadata
-				// If column is pure data (no formulas), skip adding any dependency
+				// For column range references like $B:$B or A:Z
+				// We need to add dependency markers for incremental recalculation
 				startColKey := sheetName + "!" + strings.ToUpper(start)
 				endColKey := sheetName + "!" + strings.ToUpper(end)
 
-				startMeta := columnMetadata[startColKey]
-				endMeta := columnMetadata[endColKey]
-
-				// Only add dependency if column has formulas
-				if startMeta != nil && startMeta.hasFormulas {
-					// Add virtual column dependency instead of expanding to all cells
-					deps["COLUMN:"+startColKey] = true
-				}
-				if start != end && endMeta != nil && endMeta.hasFormulas {
+				// ALWAYS add column dependency for incremental recalculation
+				// Even if the column is pure data (no formulas), we need to track
+				// that this formula depends on changes to that column
+				deps["COLUMN:"+startColKey] = true
+				if start != end {
 					deps["COLUMN:"+endColKey] = true
 				}
-				// If neither column has formulas, NO dependency is added - this is the key optimization
 			} else {
 				// Regular range like A1:B10 or K3:CV3
 				// For large ranges, only add formula cells within the range

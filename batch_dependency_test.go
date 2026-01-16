@@ -522,3 +522,288 @@ func TestBatchUpdateValuesAndFormulasWithRecalc(t *testing.T) {
 		}
 	})
 }
+
+// TestColumnRangeDependencyInIncrementalRecalc tests that formulas referencing column ranges
+// (like $B:$B) are correctly recalculated when data in that column is updated.
+// This is a critical test for the fix that ensures column range dependencies are always tracked,
+// even for pure data columns (columns without formulas).
+func TestColumnRangeDependencyInIncrementalRecalc(t *testing.T) {
+	t.Run("PureDataColumnWithINDEX_MATCH", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+
+		// Data sheet has pure data (no formulas) in column A (SKU) and column B (values)
+		skus := []string{"SKU001", "SKU002", "SKU003", "SKU004", "SKU005"}
+		values := []int{100, 200, 300, 400, 500}
+		for i, sku := range skus {
+			f.SetCellValue("Data", "A"+string(rune('1'+i)), sku)
+			f.SetCellValue("Data", "B"+string(rune('1'+i)), values[i])
+		}
+
+		// Sheet1 has formulas that reference Data sheet using column ranges
+		// INDEX($B:$B, MATCH(..., $A:$A, 0))
+		f.SetCellValue("Sheet1", "A1", "SKU003")
+		f.SetCellFormula("Sheet1", "B1", "=INDEX(Data!$B:$B,MATCH(A1,Data!$A:$A,0))")
+
+		f.SetCellValue("Sheet1", "A2", "SKU001")
+		f.SetCellFormula("Sheet1", "B2", "=INDEX(Data!$B:$B,MATCH(A2,Data!$A:$A,0))")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		// Verify initial values
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		b2Before, _ := f.GetCellValue("Sheet1", "B2")
+		if b1Before != "300" {
+			t.Fatalf("expected Sheet1!B1=300 before update, got %s", b1Before)
+		}
+		if b2Before != "100" {
+			t.Fatalf("expected Sheet1!B2=100 before update, got %s", b2Before)
+		}
+
+		// Update Data!B3 (SKU003's value) from 300 to 999
+		f.SetCellValue("Data", "B3", 999)
+
+		// Use incremental recalculation
+		updatedCells := map[string]bool{
+			"Data!B3": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify Sheet1!B1 was recalculated (it references SKU003 which was updated)
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "999" {
+			t.Errorf("expected Sheet1!B1=999 after update, got %s (formula depends on Data!$B:$B column range)", b1After)
+		}
+
+		// Verify Sheet1!B2 is still correct (it references SKU001 which was NOT updated)
+		b2After, _ := f.GetCellValue("Sheet1", "B2")
+		if b2After != "100" {
+			t.Errorf("expected Sheet1!B2=100 (unchanged), got %s", b2After)
+		}
+	})
+
+	t.Run("PureDataColumnWithSUMIFS", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+
+		// Data sheet: Category (A), Date (B), Value (C)
+		data := [][]interface{}{
+			{"Cat1", "2024-01-01", 100},
+			{"Cat1", "2024-01-02", 200},
+			{"Cat2", "2024-01-01", 300},
+			{"Cat2", "2024-01-02", 400},
+		}
+		for i, row := range data {
+			f.SetCellValue("Data", "A"+string(rune('1'+i)), row[0])
+			f.SetCellValue("Data", "B"+string(rune('1'+i)), row[1])
+			f.SetCellValue("Data", "C"+string(rune('1'+i)), row[2])
+		}
+
+		// Sheet1: SUMIFS referencing column ranges
+		f.SetCellValue("Sheet1", "A1", "Cat1")
+		f.SetCellFormula("Sheet1", "B1", "=SUMIFS(Data!$C:$C,Data!$A:$A,A1)")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		// Verify initial value: Cat1 has 100+200=300
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		if b1Before != "300" {
+			t.Fatalf("expected Sheet1!B1=300 before update, got %s", b1Before)
+		}
+
+		// Update Data!C1 (Cat1's first value) from 100 to 500
+		f.SetCellValue("Data", "C1", 500)
+
+		// Use incremental recalculation
+		updatedCells := map[string]bool{
+			"Data!C1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify SUMIFS was recalculated: Cat1 now has 500+200=700
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "700" {
+			t.Errorf("expected Sheet1!B1=700 after update, got %s (SUMIFS depends on Data!$C:$C column range)", b1After)
+		}
+	})
+
+	t.Run("MultiColumnRangeReference", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Source")
+
+		// Source sheet has data in columns A, B, C (all pure data, no formulas)
+		f.SetCellValue("Source", "A1", 10)
+		f.SetCellValue("Source", "B1", 20)
+		f.SetCellValue("Source", "C1", 30)
+		f.SetCellValue("Source", "A2", 40)
+		f.SetCellValue("Source", "B2", 50)
+		f.SetCellValue("Source", "C2", 60)
+
+		// Sheet1 uses SUMPRODUCT with column ranges
+		f.SetCellFormula("Sheet1", "D1", "=SUM(Source!$A:$A)")
+		f.SetCellFormula("Sheet1", "E1", "=SUM(Source!$B:$B)")
+		f.SetCellFormula("Sheet1", "F1", "=SUM(Source!$C:$C)")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		// Verify initial values
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		e1, _ := f.GetCellValue("Sheet1", "E1")
+		f1Val, _ := f.GetCellValue("Sheet1", "F1")
+		if d1 != "50" || e1 != "70" || f1Val != "90" {
+			t.Fatalf("expected D1=50, E1=70, F1=90 before update, got D1=%s, E1=%s, F1=%s", d1, e1, f1Val)
+		}
+
+		// Update only Source!A1
+		f.SetCellValue("Source", "A1", 100)
+
+		updatedCells := map[string]bool{
+			"Source!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// Verify D1 was recalculated (depends on column A)
+		d1After, _ := f.GetCellValue("Sheet1", "D1")
+		if d1After != "140" { // 100 + 40 = 140
+			t.Errorf("expected D1=140 after update, got %s", d1After)
+		}
+
+		// Verify E1 and F1 are still correct (they don't depend on column A)
+		e1After, _ := f.GetCellValue("Sheet1", "E1")
+		f1After, _ := f.GetCellValue("Sheet1", "F1")
+		if e1After != "70" {
+			t.Errorf("expected E1=70 (unchanged), got %s", e1After)
+		}
+		if f1After != "90" {
+			t.Errorf("expected F1=90 (unchanged), got %s", f1After)
+		}
+	})
+
+	t.Run("ColumnRangeWithMixedContent", func(t *testing.T) {
+		f := NewFile()
+
+		// Sheet1 has mixed content: some data cells, some formula cells
+		f.SetCellValue("Sheet1", "A1", 10)         // data
+		f.SetCellValue("Sheet1", "A2", 20)         // data
+		f.SetCellFormula("Sheet1", "A3", "=A1+A2") // formula
+		f.SetCellValue("Sheet1", "A4", 40)         // data
+
+		// B1 uses column range reference to A
+		f.SetCellFormula("Sheet1", "B1", "=SUM($A:$A)")
+
+		// Calculate initial values
+		f.RecalculateAllWithDependency()
+
+		// A3 should be 30, B1 should be 10+20+30+40=100
+		a3, _ := f.GetCellValue("Sheet1", "A3")
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if a3 != "30" {
+			t.Fatalf("expected A3=30, got %s", a3)
+		}
+		if b1 != "100" {
+			t.Fatalf("expected B1=100 before update, got %s", b1)
+		}
+
+		// Update A1 (should affect both A3 and B1)
+		f.SetCellValue("Sheet1", "A1", 100)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+		err := f.RecalculateAffectedByCells(updatedCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCells failed: %v", err)
+		}
+
+		// A3 should be 100+20=120, B1 should be 100+20+120+40=280
+		a3After, _ := f.GetCellValue("Sheet1", "A3")
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if a3After != "120" {
+			t.Errorf("expected A3=120 after update, got %s", a3After)
+		}
+		if b1After != "280" {
+			t.Errorf("expected B1=280 after update (depends on $A:$A column range), got %s", b1After)
+		}
+	})
+}
+
+// TestExtractDependenciesOptimizedColumnRange tests that extractDependenciesOptimized
+// correctly adds column dependencies for column range references.
+func TestExtractDependenciesOptimizedColumnRange(t *testing.T) {
+	t.Run("ColumnRangeAlwaysAddsDependency", func(t *testing.T) {
+		// Formula: =INDEX(Data!$B:$B,MATCH(A1,Data!$A:$A,0))
+		// Should add COLUMN:Data!B and COLUMN:Data!A as dependencies
+		formula := "INDEX(Data!$B:$B,MATCH(A1,Data!$A:$A,0))"
+		deps := extractDependenciesOptimized(formula, "Sheet1", "B1", nil, nil)
+
+		hasColB := false
+		hasColA := false
+		for _, dep := range deps {
+			if dep == "COLUMN:Data!B" {
+				hasColB = true
+			}
+			if dep == "COLUMN:Data!A" {
+				hasColA = true
+			}
+		}
+
+		if !hasColB {
+			t.Errorf("expected COLUMN:Data!B in dependencies, got %v", deps)
+		}
+		if !hasColA {
+			t.Errorf("expected COLUMN:Data!A in dependencies, got %v", deps)
+		}
+	})
+
+	t.Run("ColumnRangeWithEmptyMetadata", func(t *testing.T) {
+		// Even with empty columnMetadata, column range should add dependency
+		formula := "SUM(Source!$C:$C)"
+		columnMetadata := make(map[string]*columnMeta)
+		// Don't add any metadata for Source!C - simulating a pure data column
+
+		deps := extractDependenciesOptimized(formula, "Sheet1", "A1", nil, columnMetadata)
+
+		hasColC := false
+		for _, dep := range deps {
+			if dep == "COLUMN:Source!C" {
+				hasColC = true
+			}
+		}
+
+		if !hasColC {
+			t.Errorf("expected COLUMN:Source!C in dependencies even for pure data column, got %v", deps)
+		}
+	})
+
+	t.Run("MultiColumnRangeReference", func(t *testing.T) {
+		// Formula with multiple column range references: =SUMIFS($H:$H,$A:$A,B1,$C:$C,D1)
+		formula := "SUMIFS($H:$H,$A:$A,B1,$C:$C,D1)"
+		deps := extractDependenciesOptimized(formula, "Sheet1", "E1", nil, nil)
+
+		expectedCols := []string{"COLUMN:Sheet1!H", "COLUMN:Sheet1!A", "COLUMN:Sheet1!C"}
+		for _, expected := range expectedCols {
+			found := false
+			for _, dep := range deps {
+				if dep == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected %s in dependencies, got %v", expected, deps)
+			}
+		}
+	})
+}
