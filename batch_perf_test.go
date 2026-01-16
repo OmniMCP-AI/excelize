@@ -2,17 +2,25 @@ package excelize
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
 
 // TestRebuildCalcChainPerformance 测试性能
 func TestRebuildCalcChainPerformance(t *testing.T) {
-	f, _ := OpenFile("/Users/zhoujielun/Downloads/跨境电商-补货计划demo-8.xlsx")
+	testFile := "/Users/zhoujielun/Downloads/跨境电商-补货计划demo-8.xlsx"
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		t.Skip("Test file not available, skipping")
+	}
+	f, err := OpenFile(testFile)
+	if err != nil {
+		t.Skipf("Cannot open test file: %v", err)
+	}
 	defer f.Close()
 
 	start := time.Now()
-	err := f.RebuildCalcChain()
+	err = f.RebuildCalcChain()
 	duration := time.Since(start)
 
 	if err != nil {

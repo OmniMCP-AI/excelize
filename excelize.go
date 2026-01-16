@@ -67,6 +67,7 @@ type File struct {
 	VolatileDeps     *xlsxVolTypes
 	WorkBook         *xlsxWorkbook
 	ZipWriter        func(io.Writer) ZipWriter
+	calcEngine       CalculationEngine // Optional DuckDB-based calculation engine
 }
 
 // ZipWriter defines an interface for writing files to a ZIP archive. It

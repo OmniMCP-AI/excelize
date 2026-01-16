@@ -2,12 +2,20 @@ package excelize
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
 // TestInspectD1 检查 D1 的详细信息
 func TestInspectD1(t *testing.T) {
-	f, _ := OpenFile("/Users/zhoujielun/Downloads/跨境电商-补货计划demo-8.xlsx")
+	testFile := "/Users/zhoujielun/Downloads/跨境电商-补货计划demo-8.xlsx"
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		t.Skip("Test file not available, skipping")
+	}
+	f, err := OpenFile(testFile)
+	if err != nil {
+		t.Skipf("Cannot open test file: %v", err)
+	}
 	defer f.Close()
 
 	sheet := "日库存"
