@@ -16,7 +16,6 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"math/big"
 	"math/cmplx"
@@ -891,8 +890,17 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		// rangeCache is sync.Map, no initialization needed
 	}, sheet, cell); err != nil {
 		result = token.String
+		// CRITICAL: Also cache error results to prevent redundant recalculation
+		simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
+		f.calcCache.Store(simpleRef, token)
 		return
 	}
+
+	// CRITICAL: Also store formulaArg in cache with simple key "Sheet!Cell"
+	// This allows rangeResolver functions to find cached values
+	simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
+	f.calcCache.Store(simpleRef, token)
+
 	if !rawCellValue {
 		// OPTIMIZATION: Use GetCellStyleReadOnly to avoid creating rows/cols
 		styleIdx, _ = f.GetCellStyleReadOnly(sheet, cell)
@@ -2261,12 +2269,28 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	ref := fmt.Sprintf("%s!%s", sheet, cell)
 
 	// Check calcCache first at cellResolver layer to avoid redundant work
-	// Use the same cache key format as CalcCellValue for consistency
-	// Note: We check both raw=true and raw=false because cellResolver returns formulaArg
-	// and either cache entry would contain the computed value
+	// Try multiple cache key formats for compatibility:
+	// 1. "Sheet!Cell" - used by cellResolver itself
+	// 2. "Sheet!Cell!raw=false" - used by CalcCellValue
+	// 3. "Sheet!Cell!raw=true" - used by CalcCellValue with RawCellValue option
 	if cached, ok := f.calcCache.Load(ref); ok {
 		if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
 			return cachedArg, nil
+		}
+	}
+	// Also check CalcCellValue's cache format (with !raw= suffix)
+	for _, rawVal := range []string{"false", "true"} {
+		cacheKeyWithRaw := ref + "!raw=" + rawVal
+		if cached, ok := f.calcCache.Load(cacheKeyWithRaw); ok {
+			// CalcCellValue stores string, convert to formulaArg
+			if cachedStr, isString := cached.(string); isString {
+				arg := newStringFormulaArg(cachedStr)
+				// Try to convert to number if applicable
+				if num := arg.ToNumber(); num.Type == ArgNumber {
+					return num, nil
+				}
+				return arg, nil
+			}
 		}
 	}
 
@@ -2318,17 +2342,17 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 						fallbackArg := newStringFormulaArg(cachedValue)
 						// 根据cell类型转换arg类型
 						if cellType, _ := f.GetCellType(sheet, cell); cellType == CellTypeNumber || cellType == CellTypeUnset {
-							return fallbackArg.ToNumber(), nil
+							fallbackArg = fallbackArg.ToNumber()
 						}
+						// CRITICAL: Cache fallback result to prevent redundant recalculation
+						f.calcCache.Store(ref, fallbackArg)
 						return fallbackArg, nil
 					}
 				}
 
-				// CRITICAL FIX: Cache successful calculation result to global calcCache
-				// This prevents redundant recalculation of the same cell in recursive scenarios
-				if arg.Type != ArgError {
-					f.calcCache.Store(ref, arg)
-				}
+				// CRITICAL FIX: Cache calculation result to global calcCache
+				// Cache BOTH success and error results to prevent redundant recalculation
+				f.calcCache.Store(ref, arg)
 
 				return arg, nil
 			}
@@ -2512,6 +2536,23 @@ func (f *File) rangeResolverParallel(ctx *calcContext, sheet string, ws *xlsxWor
 							return
 						}
 
+						// OPTIMIZATION: Check worksheetCache first for RecalculateAllWithDependency
+						if ctx.worksheetCache != nil {
+							if cachedArg, found := ctx.worksheetCache.Get(sheet, cell); found {
+								matrix[row-valueRange[0]][col-valueRange[2]] = cachedArg
+								continue
+							}
+						}
+
+						// Also check global calcCache
+						ref := fmt.Sprintf("%s!%s", sheet, cell)
+						if cached, ok := f.calcCache.Load(ref); ok {
+							if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
+								matrix[row-valueRange[0]][col-valueRange[2]] = cachedArg
+								continue
+							}
+						}
+
 						value, err = f.cellResolver(ctx, sheet, cell)
 						if err != nil {
 							errMu.Lock()
@@ -2588,6 +2629,23 @@ func (f *File) rangeResolverParallelCols(ctx *calcContext, sheet string, ws *xls
 							return
 						}
 
+						// OPTIMIZATION: Check worksheetCache first for RecalculateAllWithDependency
+						if ctx.worksheetCache != nil {
+							if cachedArg, found := ctx.worksheetCache.Get(sheet, cell); found {
+								matrix[row-valueRange[0]][col-valueRange[2]] = cachedArg
+								continue
+							}
+						}
+
+						// Also check global calcCache
+						ref := fmt.Sprintf("%s!%s", sheet, cell)
+						if cached, ok := f.calcCache.Load(ref); ok {
+							if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
+								matrix[row-valueRange[0]][col-valueRange[2]] = cachedArg
+								continue
+							}
+						}
+
 						value, err = f.cellResolver(ctx, sheet, cell)
 						if err != nil {
 							errMu.Lock()
@@ -2648,15 +2706,32 @@ func (f *File) rangeResolverSingleRow(ctx *calcContext, sheet string, ws *xlsxWo
 
 	// Read each column value
 	for col := startCol; col <= endCol; col++ {
-		if cellIdx, ok := colMap[col]; ok {
-			_ = cellIdx // cellIdx is used to verify column exists in colMap
+		if _, ok := colMap[col]; ok {
 			cellName, err := CoordinatesToCellName(col, row)
 			if err != nil {
 				return nil, err
 			}
 
-			// Get cell value directly without formula calculation
-			// This is faster than cellResolver which may trigger formula evaluation
+			// OPTIMIZATION for RecalculateAllWithDependency:
+			// When worksheetCache exists, dependencies are already calculated in previous levels.
+			// Directly use cached values to avoid redundant recursive calculations.
+			if ctx.worksheetCache != nil {
+				if cachedArg, found := ctx.worksheetCache.Get(sheet, cellName); found {
+					matrix[0][col-startCol] = cachedArg
+					continue
+				}
+			}
+
+			// Also check global calcCache (used by CalcCellValue)
+			ref := fmt.Sprintf("%s!%s", sheet, cellName)
+			if cached, ok := f.calcCache.Load(ref); ok {
+				if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
+					matrix[0][col-startCol] = cachedArg
+					continue
+				}
+			}
+
+			// Fallback: use cellResolver (may trigger formula calculation)
 			value, err := f.cellResolver(ctx, sheet, cellName)
 			if err != nil {
 				return nil, err
@@ -2687,6 +2762,21 @@ func (f *File) rangeResolverSerial(ctx *calcContext, sheet string, ws *xlsxWorks
 				cell, err := CoordinatesToCellName(col, row)
 				if err != nil {
 					return nil, err
+				}
+				// OPTIMIZATION: Check worksheetCache first for RecalculateAllWithDependency
+				if ctx.worksheetCache != nil {
+					if cachedArg, found := ctx.worksheetCache.Get(sheet, cell); found {
+						matrixRow = append(matrixRow, cachedArg)
+						continue
+					}
+				}
+				// Also check global calcCache
+				ref := fmt.Sprintf("%s!%s", sheet, cell)
+				if cached, ok := f.calcCache.Load(ref); ok {
+					if cachedArg, isFormulaArg := cached.(formulaArg); isFormulaArg {
+						matrixRow = append(matrixRow, cachedArg)
+						continue
+					}
 				}
 				value, err = f.cellResolver(ctx, sheet, cell)
 				if err != nil {
@@ -21811,16 +21901,6 @@ func (fn *formulaFuncs) DISPIMG(argsList *list.List) formulaArg {
 // Example: J2 accesses K2:AAC2, J3 accesses K3:AAC3, etc.
 // Instead of loading each row separately, we load all rows at once
 func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endCol int, worksheetCache *WorksheetCache) error {
-	numRows := endRow - startRow + 1
-	numCols := endCol - startCol + 1
-	totalCells := numRows * numCols
-
-	log.Printf("🔄 [PreloadColumnRange] 预读取 %s!R%dC%d:R%dC%d (%d行 x %d列 = %d cells)",
-		sheet, startRow, startCol, endRow, endCol,
-		numRows, numCols, totalCells)
-
-	start := time.Now()
-
 	ws, err := f.workSheetReader(sheet)
 	if err != nil {
 		return err
@@ -21847,8 +21927,6 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 			}
 		}
 	}
-
-	mapBuildTime := time.Since(start)
 
 	// Second pass: load all cell values and cache each row range
 	numWorkers := runtime.NumCPU()
@@ -21935,10 +22013,6 @@ func (f *File) PreloadColumnRange(sheet string, startRow, endRow, startCol, endC
 	}
 
 	wg.Wait()
-
-	elapsed := time.Since(start)
-	log.Printf("✅ [PreloadColumnRange] 完成: 缓存了 %d 个行范围, 耗时: %v (map构建: %v, 数据读取: %v)",
-		cachedCount, elapsed, mapBuildTime, elapsed-mapBuildTime)
 
 	return nil
 }

@@ -816,6 +816,68 @@ func (f *File) RemoveCol(sheet, col string) error {
 	return f.adjustHelper(sheet, columns, num, -1)
 }
 
+// RemoveCols provides a function to remove multiple columns at once by given
+// worksheet name, starting column name, and the number of columns to delete.
+// This is significantly faster than calling RemoveCol multiple times as it
+// only performs adjustment operations once. For example, remove 5 columns
+// starting from column C in Sheet1:
+//
+//	err := f.RemoveCols("Sheet1", "C", 5)
+//
+// Use this method with caution, which will affect changes in references such
+// as formulas, charts, and so on. If there is any referenced value of the
+// worksheet, it will cause a file error when you open it. The excelize only
+// partially updates these references currently.
+func (f *File) RemoveCols(sheet, col string, num int) error {
+	colNum, err := ColumnNameToNumber(col)
+	if err != nil {
+		return err
+	}
+	if num < 1 {
+		return ErrParameterInvalid
+	}
+	if colNum < 1 || colNum > MaxColumns || colNum+num-1 > MaxColumns {
+		return ErrColumnNumber
+	}
+
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	ws.formulaSI.Clear()
+
+	// Calculate the range of columns to delete
+	deleteStart := colNum
+	deleteEnd := colNum + num - 1
+
+	// Build a map of column names to delete for fast lookup
+	deleteColMap := make(map[string]bool)
+	for i := deleteStart; i <= deleteEnd; i++ {
+		colName, err := ColumnNumberToName(i)
+		if err != nil {
+			return err
+		}
+		deleteColMap[colName] = true
+	}
+
+	// Remove cells in the deleted columns from all rows
+	for rowIdx := range ws.SheetData.Row {
+		rowData := &ws.SheetData.Row[rowIdx]
+		keep := 0
+		for colIdx := range rowData.C {
+			colName, _, _ := SplitCellName(rowData.C[colIdx].R)
+			if !deleteColMap[colName] {
+				rowData.C[keep] = rowData.C[colIdx]
+				keep++
+			}
+		}
+		rowData.C = rowData.C[:keep]
+	}
+
+	// Perform adjustment only once for all deleted columns
+	return f.adjustHelper(sheet, columns, colNum, -num)
+}
+
 // convertColWidthToPixels provides function to convert the width of a cell
 // from user's units to pixels. Excel rounds the column width to the nearest
 // pixel. If the width hasn't been set by the user we use the default value.

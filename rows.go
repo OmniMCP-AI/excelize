@@ -809,6 +809,66 @@ func (f *File) RemoveRow(sheet string, row int) error {
 	return f.adjustHelper(sheet, rows, row, -1)
 }
 
+// RemoveRows provides a function to remove multiple rows at once by given
+// worksheet name, starting row number, and the number of rows to delete. This
+// is significantly faster than calling RemoveRow multiple times as it only
+// performs adjustment operations once. For example, remove 10 rows starting
+// from row 3 in Sheet1:
+//
+//	err := f.RemoveRows("Sheet1", 3, 10)
+//
+// Use this method with caution, which will affect changes in references such
+// as formulas, charts, and so on. If there is any referenced value of the
+// worksheet, it will cause a file error when you open it. The excelize only
+// partially updates these references currently.
+func (f *File) RemoveRows(sheet string, row, num int) error {
+	if row < 1 {
+		return newInvalidRowNumberError(row)
+	}
+	if num < 1 {
+		return ErrParameterInvalid
+	}
+	if row >= TotalRows || row+num > TotalRows {
+		return ErrMaxRows
+	}
+
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	ws.formulaSI.Clear()
+
+	// Calculate the range of rows to delete
+	deleteStart := row
+	deleteEnd := row + num - 1
+
+	// Remove formulas from all deleted rows
+	for rowIdx := range ws.SheetData.Row {
+		v := &ws.SheetData.Row[rowIdx]
+		if v.R >= deleteStart && v.R <= deleteEnd {
+			for _, c := range v.C {
+				if err := f.removeFormula(&c, ws, sheet); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	// Remove the rows from SheetData.Row slice
+	keep := 0
+	for rowIdx := range ws.SheetData.Row {
+		v := &ws.SheetData.Row[rowIdx]
+		if v.R < deleteStart || v.R > deleteEnd {
+			ws.SheetData.Row[keep] = *v
+			keep++
+		}
+	}
+	ws.SheetData.Row = ws.SheetData.Row[:keep]
+
+	// Perform adjustment only once for all deleted rows
+	return f.adjustHelper(sheet, rows, row, -num)
+}
+
 // InsertRows provides a function to insert new rows after the given Excel row
 // number starting from 1 and number of rows. For example, create two rows
 // before row 3 in Sheet1:
