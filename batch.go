@@ -1609,7 +1609,10 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 	for _, update := range valueUpdates {
 		cacheKey := update.Sheet + "!" + update.Cell
 		valueStr := fmt.Sprintf("%v", update.Value)
-		// 同时写入两种缓存格式
+		// 存储 formulaArg 类型到缓存（供 rangeResolver 使用）
+		arg := inferFormulaResultType(valueStr)
+		f.calcCache.Store(cacheKey, arg)
+		// 存储字符串类型到缓存
 		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
 		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
 	}
@@ -1621,7 +1624,35 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 		}
 	}
 
-	// 4. 收集被更新的单元格（精确到单元格级别）
+	// 4. 立即计算更新的公式并写入缓存和 worksheet
+	//    这确保依赖这些公式的单元格能读到正确的值
+	//    同时 GetCellValue 也能返回正确的值
+	//    保存计算结果，以便在增量重算后恢复
+	formulaResults := make(map[string]string) // "Sheet!Cell" -> calculated value
+	for _, formula := range formulaUpdates {
+		// 清除旧缓存（包括所有格式的缓存 key）
+		cacheKey := formula.Sheet + "!" + formula.Cell
+		f.calcCache.Delete(cacheKey)                // formulaArg 类型缓存
+		f.calcCache.Delete(cacheKey + "!raw=false") // 字符串类型缓存
+		f.calcCache.Delete(cacheKey + "!raw=true")  // 字符串类型缓存
+
+		// 计算公式
+		value, err := f.CalcCellValue(formula.Sheet, formula.Cell)
+		if err == nil {
+			// 存储 formulaArg 类型到缓存（供 rangeResolver 使用）
+			arg := inferFormulaResultType(value)
+			f.calcCache.Store(cacheKey, arg)
+			// 存储字符串类型到缓存（供 GetCellValue 等使用）
+			f.calcCache.Store(cacheKey+"!raw=false", value)
+			f.calcCache.Store(cacheKey+"!raw=true", value)
+			// 将计算结果写入 worksheet XML，这样 GetCellValue 能正确读取
+			f.setFormulaValue(formula.Sheet, formula.Cell, value)
+			// 保存结果以便增量重算后恢复
+			formulaResults[cacheKey] = value
+		}
+	}
+
+	// 5. 收集被更新的单元格（精确到单元格级别）
 	updatedCells := make(map[string]bool) // "Sheet!Cell" -> true
 	for _, update := range valueUpdates {
 		updatedCells[update.Sheet+"!"+update.Cell] = true
@@ -1630,8 +1661,38 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 		updatedCells[formula.Sheet+"!"+formula.Cell] = true
 	}
 
-	// 5. 增量重算：只计算依赖于更新单元格的公式
-	return f.RecalculateAffectedByCells(updatedCells)
+	// 6. 增量重算：只计算依赖于更新单元格的公式
+	//    注意：RecalculateAffectedByCells 可能会清除缓存（包括我们刚设置的公式值）
+	err := f.RecalculateAffectedByCells(updatedCells)
+
+	// 7. 恢复更新的公式值到缓存和 worksheet
+	//    因为增量重算可能清除了这些缓存，需要重新写入
+	for _, formula := range formulaUpdates {
+		cacheKey := formula.Sheet + "!" + formula.Cell
+		if value, ok := formulaResults[cacheKey]; ok {
+			// 存储 formulaArg 类型到缓存（供 rangeResolver 使用）
+			arg := inferFormulaResultType(value)
+			f.calcCache.Store(cacheKey, arg)
+			// 存储字符串类型到缓存
+			f.calcCache.Store(cacheKey+"!raw=false", value)
+			f.calcCache.Store(cacheKey+"!raw=true", value)
+			f.setFormulaValue(formula.Sheet, formula.Cell, value)
+		}
+	}
+
+	// 8. 恢复更新的值到缓存
+	for _, update := range valueUpdates {
+		cacheKey := update.Sheet + "!" + update.Cell
+		valueStr := fmt.Sprintf("%v", update.Value)
+		// 存储 formulaArg 类型到缓存（供 rangeResolver 使用）
+		arg := inferFormulaResultType(valueStr)
+		f.calcCache.Store(cacheKey, arg)
+		// 存储字符串类型到缓存
+		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
+		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
+	}
+
+	return err
 }
 
 // findAffectedFormulasByScanning 通过扫描所有工作表来找出受影响的公式

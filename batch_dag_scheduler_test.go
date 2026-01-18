@@ -1,7 +1,10 @@
 package excelize
 
 import (
+	"strconv"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestCalcCellValueLockFreeUsesCache(t *testing.T) {
@@ -135,4 +138,239 @@ func TestInferFormulaAndXMLTypes(t *testing.T) {
 	if inferXMLCellType("text") != "str" {
 		t.Fatalf("text should map to string XML type")
 	}
+}
+
+// TestDAGSchedulerGoroutineLeak 测试 DAG 调度器在异常情况下不会发生 goroutine 泄漏
+func TestDAGSchedulerGoroutineLeak(t *testing.T) {
+	t.Run("EmptyGraph", func(t *testing.T) {
+		// 空图应该立即完成，不会有 goroutine 泄漏
+		f := NewFile()
+		defer f.Close()
+
+		graph := &dependencyGraph{
+			nodes:  make(map[string]*formulaNode),
+			levels: make([][]string, 0),
+		}
+
+		scheduler := f.NewDAGScheduler(graph, 4, nil)
+
+		done := make(chan struct{})
+		go func() {
+			scheduler.Run()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 正常完成
+		case <-time.After(5 * time.Second):
+			t.Fatal("DAG scheduler with empty graph should complete immediately")
+		}
+	})
+
+	t.Run("AllLevel0FormulasComplete", func(t *testing.T) {
+		// 所有公式都在 Level 0（无依赖），应该快速完成
+		f := NewFile()
+		defer f.Close()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellValue("Sheet1", "A2", 20)
+		f.SetCellFormula("Sheet1", "B1", "A1*2")
+		f.SetCellFormula("Sheet1", "B2", "A2*2")
+
+		graph := &dependencyGraph{
+			nodes: map[string]*formulaNode{
+				"Sheet1!B1": {formula: "A1*2", dependencies: []string{"Sheet1!A1"}},
+				"Sheet1!B2": {formula: "A2*2", dependencies: []string{"Sheet1!A2"}},
+			},
+			levels: [][]string{{"Sheet1!B1", "Sheet1!B2"}},
+		}
+
+		scheduler := f.NewDAGScheduler(graph, 4, nil)
+
+		done := make(chan struct{})
+		go func() {
+			scheduler.Run()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 正常完成
+		case <-time.After(10 * time.Second):
+			t.Fatal("DAG scheduler should complete within timeout")
+		}
+	})
+
+	t.Run("PartialDependencySatisfied", func(t *testing.T) {
+		// 依赖的是非公式节点（data cell），应该正常完成
+		f := NewFile()
+		defer f.Close()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+
+		// B1 依赖 A1（data cell，不在 nodes 中）
+		graph := &dependencyGraph{
+			nodes: map[string]*formulaNode{
+				"Sheet1!B1": {
+					formula:      "A1*2",
+					dependencies: []string{"Sheet1!A1"},
+				},
+			},
+			levels: [][]string{{"Sheet1!B1"}},
+		}
+
+		scheduler := f.NewDAGScheduler(graph, 4, nil)
+
+		done := make(chan struct{})
+		go func() {
+			scheduler.Run()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 正常完成
+		case <-time.After(10 * time.Second):
+			t.Fatal("DAG scheduler should handle data cell dependencies gracefully")
+		}
+	})
+
+	t.Run("ConcurrentSchedulerRuns", func(t *testing.T) {
+		// 并发运行多个调度器，确保没有 goroutine 泄漏
+		f := NewFile()
+		defer f.Close()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "A1*2")
+
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				graph := &dependencyGraph{
+					nodes: map[string]*formulaNode{
+						"Sheet1!B1": {formula: "A1*2", dependencies: []string{"Sheet1!A1"}},
+					},
+					levels: [][]string{{"Sheet1!B1"}},
+				}
+
+				scheduler := f.NewDAGScheduler(graph, 2, nil)
+				scheduler.Run()
+			}()
+		}
+
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 所有调度器正常完成
+		case <-time.After(30 * time.Second):
+			t.Fatal("Concurrent scheduler runs should complete without hanging")
+		}
+	})
+
+	t.Run("LargeGraphCompletion", func(t *testing.T) {
+		// 大图场景，确保能在合理时间内完成
+		f := NewFile()
+		defer f.Close()
+
+		// 创建 100 个独立的公式（无依赖）
+		nodes := make(map[string]*formulaNode)
+		level0 := make([]string, 100)
+		for i := 0; i < 100; i++ {
+			colName, _ := ColumnNumberToName(i%26 + 2) // B, C, D, ...
+			rowNum := i/26 + 1
+			cell := "Sheet1!" + colName + strconv.Itoa(rowNum)
+			nodes[cell] = &formulaNode{formula: "1+1", dependencies: nil}
+			level0[i] = cell
+		}
+
+		graph := &dependencyGraph{
+			nodes:  nodes,
+			levels: [][]string{level0},
+		}
+
+		scheduler := f.NewDAGScheduler(graph, 8, nil)
+
+		done := make(chan struct{})
+		go func() {
+			scheduler.Run()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 正常完成
+		case <-time.After(30 * time.Second):
+			t.Fatal("Large graph should complete within timeout")
+		}
+	})
+}
+
+// TestDAGSchedulerDeadlockDetection 测试调度器的死锁检测机制
+func TestDAGSchedulerDeadlockDetection(t *testing.T) {
+	t.Run("CircularDependencyInLevel", func(t *testing.T) {
+		// 层内循环依赖应该被 NewDAGSchedulerForLevel 检测到
+		f := NewFile()
+		defer f.Close()
+
+		graph := &dependencyGraph{
+			nodes: map[string]*formulaNode{
+				"Sheet1!A1": {cell: "Sheet1!A1", formula: "B1+1", dependencies: []string{"Sheet1!B1"}},
+				"Sheet1!B1": {cell: "Sheet1!B1", formula: "A1+1", dependencies: []string{"Sheet1!A1"}},
+			},
+			levels: [][]string{{"Sheet1!A1", "Sheet1!B1"}},
+		}
+
+		subExprCache := NewSubExpressionCache()
+		worksheetCache := NewWorksheetCache()
+
+		scheduler, ok := f.NewDAGSchedulerForLevel(graph, 0, graph.levels[0], 4, subExprCache, worksheetCache)
+
+		// 层内有循环依赖时，应该返回 false
+		if ok || scheduler != nil {
+			t.Fatal("Should detect circular dependency and return false")
+		}
+	})
+
+	t.Run("DeferCloseOnNormalExit", func(t *testing.T) {
+		// 正常退出时 defer 应该正确关闭队列
+		f := NewFile()
+		defer f.Close()
+
+		f.SetCellValue("Sheet1", "A1", 5)
+		f.SetCellFormula("Sheet1", "B1", "A1+1")
+
+		graph := &dependencyGraph{
+			nodes: map[string]*formulaNode{
+				"Sheet1!B1": {formula: "A1+1", dependencies: []string{}},
+			},
+			levels: [][]string{{"Sheet1!B1"}},
+		}
+
+		scheduler := f.NewDAGScheduler(graph, 2, nil)
+
+		done := make(chan struct{})
+		go func() {
+			scheduler.Run()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// 验证队列已关闭
+			if !scheduler.queueClosed.Load() {
+				t.Fatal("Queue should be closed after Run completes")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Scheduler should complete within timeout")
+		}
+	})
 }

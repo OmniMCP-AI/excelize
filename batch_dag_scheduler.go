@@ -160,6 +160,15 @@ func (scheduler *DAGScheduler) Run() {
 	startTime := time.Now()
 	log.Printf("🚀 [DAG Scheduler] Starting: %d formulas with %d workers", scheduler.totalFormulas, scheduler.numWorkers)
 
+	// 边界情况：空图直接返回
+	if scheduler.totalFormulas == 0 {
+		log.Printf("✅ [DAG Scheduler] No formulas to calculate, exiting immediately")
+		return
+	}
+
+	// 确保在函数退出时关闭队列，防止 goroutine 泄漏
+	defer scheduler.closeReadyQueue()
+
 	var wg sync.WaitGroup
 
 	// 启动worker pool
@@ -168,15 +177,48 @@ func (scheduler *DAGScheduler) Run() {
 		go scheduler.worker(&wg, i)
 	}
 
+	// 启动死锁检测 goroutine
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		lastCompleted := int64(0)
+		stallCount := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				currentCompleted := scheduler.completedCount.Load()
+				inFlight := scheduler.inFlightCount.Load()
+				if currentCompleted == lastCompleted && inFlight == 0 && currentCompleted < int64(scheduler.totalFormulas) {
+					stallCount++
+					if stallCount >= 2 {
+						// 连续两次检测到停滞，可能存在死锁
+						log.Printf("⚠️ [DAG Scheduler] Detected stall: completed=%d/%d, inFlight=%d, forcing close",
+							currentCompleted, scheduler.totalFormulas, inFlight)
+						scheduler.closeReadyQueue()
+						return
+					}
+				} else {
+					stallCount = 0
+				}
+				lastCompleted = currentCompleted
+			}
+		}
+	}()
+
 	// 等待所有worker完成
 	wg.Wait()
-
-	// 确保队列关闭
-	scheduler.closeReadyQueue()
+	close(done)
 
 	duration := time.Since(startTime)
-	log.Printf("✅ [DAG Scheduler] Completed %d formulas in %v (avg: %v/formula)",
-		scheduler.totalFormulas, duration, duration/time.Duration(scheduler.totalFormulas))
+	if scheduler.totalFormulas > 0 {
+		log.Printf("✅ [DAG Scheduler] Completed %d formulas in %v (avg: %v/formula)",
+			scheduler.totalFormulas, duration, duration/time.Duration(scheduler.totalFormulas))
+	} else {
+		log.Printf("✅ [DAG Scheduler] Completed in %v", duration)
+	}
 
 	// 输出慢速公式统计
 	if len(scheduler.slowFormulas) > 0 {

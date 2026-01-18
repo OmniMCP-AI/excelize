@@ -521,6 +521,176 @@ func TestBatchUpdateValuesAndFormulasWithRecalc(t *testing.T) {
 			t.Fatalf("empty slices should not fail: %v", err)
 		}
 	})
+
+	t.Run("FormulaOnlyUpdate", func(t *testing.T) {
+		// 测试只传公式更新的场景
+		// 这个场景之前有 bug：公式设置后值为空，导致依赖它的单元格计算错误
+		f := NewFile()
+
+		// 设置初始数据
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2") // 初始公式
+		f.SetCellFormula("Sheet1", "C1", "=B1+5") // 依赖 B1
+
+		// 初始计算
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		c1Before, _ := f.GetCellValue("Sheet1", "C1")
+		if b1Before != "20" {
+			t.Fatalf("expected B1=20 before update, got %s", b1Before)
+		}
+		if c1Before != "25" {
+			t.Fatalf("expected C1=25 before update, got %s", c1Before)
+		}
+
+		// 只传公式，不传值：将 B1 的公式改为固定值 100
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=100"},
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(nil, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// 验证 B1 的值不为空
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "100" {
+			t.Errorf("expected B1=100 after formula update, got '%s'", b1After)
+		}
+
+		// 验证依赖 B1 的 C1 也被正确重算
+		c1After, _ := f.GetCellValue("Sheet1", "C1")
+		if c1After != "105" {
+			t.Errorf("expected C1=105 after B1 formula update, got '%s'", c1After)
+		}
+	})
+
+	t.Run("FormulaOnlyUpdateWithDependentIF", func(t *testing.T) {
+		// 测试带 IF 条件的依赖场景
+		// 模拟实际场景：IF(IFERROR(INDEX(...),0)=0,"断货",...)
+		f := NewFile()
+
+		// 设置初始数据
+		f.SetCellValue("Sheet1", "A1", 100)
+		f.SetCellFormula("Sheet1", "B1", "=A1") // 初始公式
+		// C1 依赖 B1，如果 B1=0 则显示"断货"
+		f.SetCellFormula("Sheet1", "C1", `=IF(B1=0,"断货",B1*2)`)
+
+		// 初始计算
+		f.RecalculateAllWithDependency()
+
+		c1Before, _ := f.GetCellValue("Sheet1", "C1")
+		if c1Before != "200" {
+			t.Fatalf("expected C1=200 before update, got %s", c1Before)
+		}
+
+		// 只传公式更新 B1
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=50"},
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(nil, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// B1 应该有值 50，不是空
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "50" {
+			t.Errorf("expected B1=50, got '%s'", b1After)
+		}
+
+		// C1 应该是 100，不是"断货"
+		c1After, _ := f.GetCellValue("Sheet1", "C1")
+		if c1After != "100" {
+			t.Errorf("expected C1=100 (50*2), got '%s' - formula may have seen empty B1", c1After)
+		}
+	})
+
+	t.Run("FormulaOnlyUpdateCrossSheet", func(t *testing.T) {
+		// 测试跨 sheet 的公式更新场景
+		f := NewFile()
+		f.NewSheet("Data")
+
+		// Data!A1 有公式
+		f.SetCellFormula("Data", "A1", "=10+5")
+		// Sheet1!B1 依赖 Data!A1
+		f.SetCellFormula("Sheet1", "B1", "=Data!A1*2")
+
+		// 初始计算
+		f.RecalculateAllWithDependency()
+
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		if b1Before != "30" {
+			t.Fatalf("expected Sheet1!B1=30 before update, got %s", b1Before)
+		}
+
+		// 只更新 Data!A1 的公式
+		formulas := []FormulaUpdate{
+			{Sheet: "Data", Cell: "A1", Formula: "=100"},
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(nil, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// Data!A1 应该有值 100
+		dataA1, _ := f.GetCellValue("Data", "A1")
+		if dataA1 != "100" {
+			t.Errorf("expected Data!A1=100, got '%s'", dataA1)
+		}
+
+		// Sheet1!B1 应该重算为 200
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "200" {
+			t.Errorf("expected Sheet1!B1=200 after Data!A1 formula update, got '%s'", b1After)
+		}
+	})
+
+	t.Run("MixedValueAndFormulaUpdate", func(t *testing.T) {
+		// 测试同时传值和公式的场景
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+		f.SetCellFormula("Sheet1", "C1", "=B1+A1")
+
+		f.RecalculateAllWithDependency()
+
+		// 同时更新值和公式
+		values := []CellUpdate{
+			{Sheet: "Sheet1", Cell: "A1", Value: 50},
+		}
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=A1*3"}, // 改为 *3
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// A1 = 50 (值更新)
+		a1, _ := f.GetCellValue("Sheet1", "A1")
+		if a1 != "50" {
+			t.Errorf("expected A1=50, got '%s'", a1)
+		}
+
+		// B1 = 150 (公式 =A1*3 = 50*3)
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "150" {
+			t.Errorf("expected B1=150, got '%s'", b1)
+		}
+
+		// C1 = 200 (公式 =B1+A1 = 150+50)
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "200" {
+			t.Errorf("expected C1=200, got '%s'", c1)
+		}
+	})
 }
 
 // TestColumnRangeDependencyInIncrementalRecalc tests that formulas referencing column ranges

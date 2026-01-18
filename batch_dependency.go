@@ -2788,12 +2788,29 @@ func (f *File) RecalculateAffectedByCells(updatedCells map[string]bool) error {
 	// ========================================
 	// 步骤5：清除受影响公式的缓存
 	// ========================================
+	// 需要清除多种格式的缓存：
+	// 1. "Sheet!Cell!raw=false" - CalcCellValue 字符串缓存
+	// 2. "Sheet!Cell!raw=true" - CalcCellValue 字符串缓存
+	// 3. "Sheet!Cell!subexpr:..." - evalFormulaString 的子表达式缓存
+	// 4. "Sheet!Cell" - formulaArg 类型缓存
 	for cell := range affected {
-		cacheKey := cell + "!raw=false"
-		f.calcCache.Delete(cacheKey)
-		cacheKeyRaw := cell + "!raw=true"
-		f.calcCache.Delete(cacheKeyRaw)
+		// 清除基本缓存
+		f.calcCache.Delete(cell)
+		f.calcCache.Delete(cell + "!raw=false")
+		f.calcCache.Delete(cell + "!raw=true")
 	}
+	// 遍历整个 calcCache，删除所有受影响单元格的 subexpr 缓存
+	f.calcCache.Range(func(key, value interface{}) bool {
+		keyStr := key.(string)
+		for cell := range affected {
+			// 检查是否是该单元格的 subexpr 缓存
+			if strings.HasPrefix(keyStr, cell+"!subexpr:") {
+				f.calcCache.Delete(key)
+				break
+			}
+		}
+		return true
+	})
 
 	// ========================================
 	// 步骤6：使用 DAG 分层并行计算
