@@ -784,7 +784,16 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) error {
 		return err
 	}
 
-	// 2. 读取 calcChain
+	// 2. 立即将更新的值写入缓存，确保后续依赖计算能读到新值
+	//    即使依赖计算失败，缓存中也保留了正确的更新值
+	for _, update := range updates {
+		cacheKey := update.Sheet + "!" + update.Cell
+		valueStr := fmt.Sprintf("%v", update.Value)
+		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
+		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
+	}
+
+	// 3. 读取 calcChain
 	calcChain, err := f.calcChainReader()
 	if err != nil {
 		return err
@@ -795,7 +804,7 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) error {
 		return nil
 	}
 
-	// 3. 收集所有被更新的单元格（用于依赖检查）
+	// 4. 收集所有被更新的单元格（用于依赖检查）
 	// 优化：同时建立列索引，加速列引用检查
 	updatedCells := make(map[string]map[string]bool)   // sheet -> cell -> true
 	updatedColumns := make(map[string]map[string]bool) // sheet -> column -> true
@@ -814,16 +823,23 @@ func (f *File) BatchUpdateAndRecalculate(updates []CellUpdate) error {
 		}
 	}
 
-	// 4. 找出所有受影响的公式单元格（通过依赖分析）
+	// 5. 找出所有受影响的公式单元格（通过依赖分析）
 	affectedFormulas := f.findAffectedFormulas(calcChain, updatedCells, updatedColumns)
 
-	// 5. 只清除受影响公式的缓存
+	// 6. 只清除受影响公式的缓存（不清除刚更新的值）
 	for cellKey := range affectedFormulas {
+		// 跳过刚更新的单元格，保留其缓存值
+		parts := strings.SplitN(cellKey, "!", 2)
+		if len(parts) == 2 {
+			if cells, ok := updatedCells[parts[0]]; ok && cells[parts[1]] {
+				continue
+			}
+		}
 		cacheKey := cellKey + "!raw=false"
 		f.calcCache.Delete(cacheKey)
 	}
 
-	// 6. 重新计算受影响的公式
+	// 7. 重新计算受影响的公式
 	err = f.recalculateAffectedCells(calcChain, affectedFormulas)
 
 	// 记录总耗时
@@ -1588,14 +1604,24 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 		}
 	}
 
-	// 2. 批量设置公式（不触发重算）
+	// 2. 立即将更新的值写入缓存，确保后续依赖计算能读到新值
+	//    即使依赖计算失败，缓存中也保留了正确的更新值
+	for _, update := range valueUpdates {
+		cacheKey := update.Sheet + "!" + update.Cell
+		valueStr := fmt.Sprintf("%v", update.Value)
+		// 同时写入两种缓存格式
+		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
+		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
+	}
+
+	// 3. 批量设置公式（不触发重算）
 	if len(formulaUpdates) > 0 {
 		if err := f.BatchSetFormulas(formulaUpdates); err != nil {
 			return err
 		}
 	}
 
-	// 3. 收集被更新的单元格（精确到单元格级别）
+	// 4. 收集被更新的单元格（精确到单元格级别）
 	updatedCells := make(map[string]bool) // "Sheet!Cell" -> true
 	for _, update := range valueUpdates {
 		updatedCells[update.Sheet+"!"+update.Cell] = true
@@ -1604,7 +1630,7 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 		updatedCells[formula.Sheet+"!"+formula.Cell] = true
 	}
 
-	// 4. 增量重算：只计算依赖于更新单元格的公式
+	// 5. 增量重算：只计算依赖于更新单元格的公式
 	return f.RecalculateAffectedByCells(updatedCells)
 }
 
