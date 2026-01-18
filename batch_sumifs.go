@@ -22,6 +22,25 @@ func (f *File) getCellValueOrCalcCache(sheet, cell string, worksheetCache *Works
 	return value
 }
 
+// getCellValueOrCalcCacheRaw retrieves cell value in raw format (for SUMIFS criteria matching)
+// CRITICAL: Always returns raw serial numbers for dates to match how data rows are read
+// This fixes the bug where dates in criteria (2025-05-27) don't match data rows (45788)
+func (f *File) getCellValueOrCalcCacheRaw(sheet, cell string, worksheetCache *WorksheetCache) string {
+	// Read from worksheetCache, but convert to raw format
+	if argValue, ok := worksheetCache.Get(sheet, cell); ok {
+		// For numbers (including dates stored as serial numbers), return the number
+		if argValue.Type == ArgNumber {
+			return fmt.Sprintf("%g", argValue.Number)
+		}
+		// For strings, return as-is
+		return argValue.Value()
+	}
+
+	// If not in cache, read with RawCellValue to get serial numbers for dates
+	value, _ := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
+	return value
+}
+
 // sumifs2DPattern represents a batch SUMIFS pattern where formulas form a 2D matrix
 type sumifs2DPattern struct {
 	// Common ranges (same for all formulas)
@@ -330,9 +349,11 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, works
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		// 优先从 worksheetCache 读取计算结果（处理公式单元格依赖）
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell, worksheetCache)
-		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell, worksheetCache)
+		// CRITICAL FIX: Use raw values for criteria to match how data rows are read
+		// This fixes date comparison bug where dates in worksheetCache are formatted
+		// but data rows are read as serial numbers (commit f03feaadf9c4982033448b301dce93bd00dde7a3)
+		c1 := f.getCellValueOrCalcCacheRaw(info.sheet, criteria1Cell, worksheetCache)
+		c2 := f.getCellValueOrCalcCacheRaw(info.sheet, criteria2Cell, worksheetCache)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {
@@ -471,8 +492,8 @@ func (f *File) calculateSUMIFS1DPattern(pattern *sumifs1DPattern) map[string]flo
 		return map[string]float64{}
 	}
 
-	// Read all rows from the source sheet
-	rows, err := f.GetRows(sourceSheet)
+	// Read all rows from the source sheet with RawCellValue for consistent date handling
+	rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
 	if err != nil || len(rows) == 0 {
 		return map[string]float64{}
 	}
@@ -486,8 +507,8 @@ func (f *File) calculateSUMIFS1DPattern(pattern *sumifs1DPattern) map[string]flo
 		// Remove $ from cell references before calling GetCellValue
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 
-		// Note: This function doesn't have worksheetCache, so use direct GetCellValue as fallback
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
+		// CRITICAL: Use RawCellValue to get serial numbers for dates (consistent with data rows)
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell, Options{RawCellValue: true})
 
 		if val, ok := resultMap[c1]; ok {
 			results[fullCell] = val
@@ -1133,8 +1154,8 @@ func (f *File) calculateAVERAGEIFS2DPattern(pattern *averageifs2DPattern) map[st
 		return map[string]float64{}
 	}
 
-	// Read all rows from the source sheet
-	rows, err := f.GetRows(sourceSheet)
+	// Read all rows from the source sheet with RawCellValue for consistent date handling
+	rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
 	if err != nil || len(rows) == 0 {
 		return map[string]float64{}
 	}
@@ -1149,9 +1170,9 @@ func (f *File) calculateAVERAGEIFS2DPattern(pattern *averageifs2DPattern) map[st
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		// Note: This function doesn't have worksheetCache, so use direct GetCellValue as fallback
-		c1, _ := f.GetCellValue(info.sheet, criteria1Cell)
-		c2, _ := f.GetCellValue(info.sheet, criteria2Cell)
+		// CRITICAL: Use RawCellValue to get serial numbers for dates (consistent with data rows)
+		c1, _ := f.GetCellValue(info.sheet, criteria1Cell, Options{RawCellValue: true})
+		c2, _ := f.GetCellValue(info.sheet, criteria2Cell, Options{RawCellValue: true})
 
 		if resultMap[c1] != nil {
 			if avgData, ok := resultMap[c1][c2]; ok {
