@@ -134,15 +134,6 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	log.Printf("  📊 [Dependency Analysis] Collected %d formulas, %d columns (%d with formulas, %d pure data)",
 		len(graph.nodes), len(graph.columnMetadata), formulaCols, dataCols)
 
-	// Debug: 检查特定列的 metadata
-	for _, colKey := range []string{"补货计划!G", "补货计划!A", "补货汇总!I", "补货汇总!J"} {
-		if meta := graph.columnMetadata[colKey]; meta != nil {
-			log.Printf("  🔍 [DEBUG] columnMetadata[%s] = hasFormulas:%v, maxRow:%d", colKey, meta.hasFormulas, meta.maxRow)
-		} else {
-			log.Printf("  🔍 [DEBUG] columnMetadata[%s] = nil", colKey)
-		}
-	}
-
 	// Step 2: Build column index for efficient column range expansion (only formula columns matter)
 	columnIndex := make(map[string][]string)
 	for cellRef := range graph.nodes {
@@ -224,16 +215,10 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	}()
 
 	// Collect results
-	debugCells := map[string]bool{"补货汇总!I3": true, "补货汇总!J3": true, "补货汇总!I2": true, "补货汇总!I4": true}
 	processedCount := 0
 	for result := range resultChan {
 		graph.nodes[result.fullCell].dependencies = result.deps
 		processedCount++
-
-		// Debug: 检查特定单元格的依赖
-		if debugCells[result.fullCell] {
-			log.Printf("  🔍 [DEBUG] %s 依赖: %v", result.fullCell, result.deps)
-		}
 
 		// Progress logging
 		if processedCount%500000 == 0 {
@@ -251,38 +236,6 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 	log.Printf("  📈 [Dependency Analysis] Dependency levels: %d levels", len(graph.levels))
 	for i, cells := range graph.levels {
 		log.Printf("      Level %d: %d formulas", i, len(cells))
-	}
-
-	// Debug: 检查 Level 78 中的公式
-	for levelIdx, cells := range graph.levels {
-		if levelIdx != 78 {
-			continue
-		}
-		buhuoHuizongI := 0
-		buhuoHuizongJ := 0
-		otherFormulas := 0
-		for _, cell := range cells {
-			if strings.HasPrefix(cell, "补货汇总!I") {
-				buhuoHuizongI++
-			} else if strings.HasPrefix(cell, "补货汇总!J") {
-				buhuoHuizongJ++
-			} else {
-				otherFormulas++
-			}
-		}
-		log.Printf("  🔍 [Level %d Analysis] 补货汇总!I=%d, 补货汇总!J=%d, other=%d", levelIdx, buhuoHuizongI, buhuoHuizongJ, otherFormulas)
-		// 显示前几个 other 公式
-		count := 0
-		for _, cell := range cells {
-			if !strings.HasPrefix(cell, "补货汇总!I") && !strings.HasPrefix(cell, "补货汇总!J") {
-				if count < 5 {
-					if node, exists := graph.nodes[cell]; exists {
-						log.Printf("    Example other: %s = %s", cell, node.formula)
-					}
-					count++
-				}
-			}
-		}
 	}
 
 	return graph
@@ -343,7 +296,7 @@ func (g *dependencyGraph) assignLevels() {
 	log.Printf("    📊 [Level Assignment] Built reverse index in %v", time.Since(startTime))
 
 	// Step 2: Calculate unresolved dependency count for each node
-	unresolvedCount := make(map[string]int)           // cell -> number of unresolved dependencies
+	unresolvedCount := make(map[string]int)               // cell -> number of unresolved dependencies
 	unresolvedColDeps := make(map[string]map[string]bool) // cell -> set of unresolved column dependencies
 
 	for cell, node := range g.nodes {
@@ -1573,26 +1526,12 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		log.Printf("\n🔄 [Level %d] Processing %d formulas", levelIdx, len(levelCells))
 
 		// Debug: 检查这个 level 是否包含 补货汇总!I 或 补货汇总!J 列的公式
-		buhuoHuizongCount := 0
-		for _, cell := range levelCells {
-			if strings.HasPrefix(cell, "补货汇总!I") || strings.HasPrefix(cell, "补货汇总!J") {
-				buhuoHuizongCount++
-			}
-		}
-		if buhuoHuizongCount > 0 {
-			log.Printf("  🎯 [Level %d DEBUG] 包含 %d 个 补货汇总!I/J 列公式", levelIdx, buhuoHuizongCount)
-		}
-
 		// ========================================
 		// 步骤1：自动检测并预读取列范围模式
 		// ========================================
 		// Detect if this level has formulas accessing the same column range across multiple rows
 		// If detected, preload the entire column range to avoid repeated single-row reads
-		log.Printf("  🔍 [Level %d] Detecting column range patterns...", levelIdx)
-		detectStart := time.Now()
 		columnRangePatterns := f.detectColumnRangePatterns(levelCells, graph)
-		detectDuration := time.Since(detectStart)
-		log.Printf("  🔍 [Level %d] Pattern detection completed in %v, found %d sheets with patterns", levelIdx, detectDuration, len(columnRangePatterns))
 		for sheet, patterns := range columnRangePatterns {
 			for _, pattern := range patterns {
 				// Find min and max row numbers
@@ -1605,9 +1544,6 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 						maxRow = row
 					}
 				}
-
-				log.Printf("  🔍 [Level %d Preload] Detected pattern: %s C%d:C%d accessed by %d formulas (rows %d-%d)",
-					levelIdx, sheet, pattern.key.startCol, pattern.key.endCol, pattern.count, minRow, maxRow)
 
 				// Preload this column range
 				if err := f.PreloadColumnRange(sheet, minRow, maxRow, pattern.key.startCol, pattern.key.endCol, worksheetCache); err != nil {
@@ -1636,12 +1572,6 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		batchOptDuration := time.Since(batchOptStart)
 		log.Printf("  ✅ [Level %d] Batch optimization completed in %v", levelIdx, batchOptDuration)
 
-		// DEBUG: 检查 worksheetCache 中存储了多少个缓存项
-		if levelIdx == 0 {
-			cacheStats := worksheetCache.GetCacheStats()
-			log.Printf("  🔍 [DEBUG] worksheetCache stats after batch opt: %v", cacheStats)
-		}
-
 		// ========================================
 		// 步骤3：使用 DAG 调度器动态计算当前层
 		// ========================================
@@ -1660,11 +1590,6 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 			}
 			dagDuration = time.Since(dagStart)
 		} else {
-			// DEBUG: 确认 scheduler 接收到的是同一个 worksheetCache
-			if levelIdx == 0 {
-				log.Printf("  🔍 [DEBUG] DAG scheduler worksheetCache ptr: %p", scheduler.worksheetCache)
-				log.Printf("  🔍 [DEBUG] Original worksheetCache ptr: %p", worksheetCache)
-			}
 			log.Printf("  🚀 [Level %d] DAG scheduler created, starting execution with %d workers...", levelIdx, numWorkers)
 			scheduler.Run()
 			dagDuration = time.Since(dagStart)
@@ -1870,17 +1795,6 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 	}
 
 	collectDuration := time.Since(collectStart)
-
-	// Debug: 检查 补货汇总!I 列的公式是否被识别
-	buhuoHuizongIndexMatch := 0
-	for cell := range indexMatchFormulas {
-		if strings.HasPrefix(cell, "补货汇总!I") || strings.HasPrefix(cell, "补货汇总!J") {
-			buhuoHuizongIndexMatch++
-		}
-	}
-	if buhuoHuizongIndexMatch > 0 {
-		log.Printf("  🎯 [Level %d DEBUG] indexMatchFormulas 包含 %d 个 补货汇总!I/J 公式", levelIdx, buhuoHuizongIndexMatch)
-	}
 
 	// 检查是否有 AVERAGE(OFFSET) 公式
 	avgOffsetCount := 0
@@ -2125,11 +2039,6 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			cleanExpr := strings.TrimSpace(indexMatchExpr)
 			parts := strings.Split(cell, "!")
 
-			// Debug: 检查特定单元格的值
-			if strings.HasPrefix(cell, "补货汇总!I") && len(cell) <= 20 {
-				log.Printf("  🔍 [DEBUG INDEX-MATCH] %s: value='%s', cleanFormula='%s', cleanExpr='%s'", cell, value, cleanFormula, cleanExpr)
-			}
-
 			// 只有纯 INDEX-MATCH 公式才存入 worksheetCache 和 calcCache
 			// 复合公式（如 IF(IFERROR(INDEX-MATCH...),0)=0,"断货",SUMIFS(...))）
 			// 只把 INDEX-MATCH 子表达式结果存入 subExprCache，让 DAG scheduler 重新计算完整公式
@@ -2187,33 +2096,6 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		formula := node.formula
 		if isAverageOffsetFormula(formula) {
 			avgOffsetFormulas[cell] = formula
-		}
-	}
-
-	if len(avgOffsetFormulas) > 0 {
-		log.Printf("  🔍 [Level %d Batch] Found %d AVERAGE(OFFSET) formulas", levelIdx, len(avgOffsetFormulas))
-	} else {
-		// Debug: 检查是否有公式包含 AVERAGE 和 OFFSET
-		avgCount, offsetCount, matchCount := 0, 0, 0
-		for cell := range levelCellsMap {
-			node, exists := graph.nodes[cell]
-			if !exists {
-				continue
-			}
-			formula := node.formula
-			if strings.Contains(formula, "AVERAGE(") {
-				avgCount++
-			}
-			if strings.Contains(formula, "OFFSET(") {
-				offsetCount++
-			}
-			if strings.Contains(formula, "MATCH(") {
-				matchCount++
-			}
-		}
-		if avgCount > 0 || offsetCount > 0 || matchCount > 0 {
-			log.Printf("  🔍 [Level %d DEBUG] AVERAGE: %d, OFFSET: %d, MATCH: %d (but no AVERAGE(OFFSET) pattern detected)",
-				levelIdx, avgCount, offsetCount, matchCount)
 		}
 	}
 

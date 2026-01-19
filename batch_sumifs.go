@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -264,8 +265,12 @@ func ExtractSUMIFSFromFormulaExport(formula string) string {
 
 // batchCalculateSUMIFSWithCache performs batch SUMIFS calculation using worksheetCache
 // This is the REAL solution - we modify batch calculation to use unified worksheetCache
+// Supports both 1D SUMIFS (1 criterion) and 2D SUMIFS (2 criteria)
 func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, worksheetCache *WorksheetCache) map[string]string {
 	results := make(map[string]string)
+
+	// Separate formulas that can be 2D vs 1D
+	remaining := make(map[string]string)
 
 	// Group formulas by pattern (same logic as batchCalculateSUMIFS)
 	patterns2D := make(map[string]*sumifs2DPattern)
@@ -279,7 +284,7 @@ func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, workshe
 		sheet := parts[0]
 		cell := parts[1]
 
-		// Try to extract 2D SUMIFS pattern
+		// Try to extract 2D SUMIFS pattern first
 		pattern := f.extractSUMIFS2DPattern(sheet, cell, formula)
 		if pattern != nil {
 			key := pattern.sumRangeRef + "|" + pattern.criteriaRange1Ref + "|" + pattern.criteriaRange2Ref
@@ -290,15 +295,90 @@ func (f *File) batchCalculateSUMIFSWithCache(formulas map[string]string, workshe
 					patterns2D[key].formulas[k] = v
 				}
 			}
+		} else {
+			// Not a 2D pattern, try 1D later
+			remaining[fullCell] = formula
 		}
 	}
 
-	// Calculate each pattern using worksheetCache
+	// Calculate each 2D pattern using worksheetCache
 	for _, pattern := range patterns2D {
-		// 关键修改：使用 worksheetCache 而不是调用 GetRows
 		patternResults := f.calculateSUMIFS2DPatternWithCache(pattern, worksheetCache)
 		for cell, value := range patternResults {
 			results[cell] = fmt.Sprintf("%v", value)
+		}
+	}
+
+	// Now handle 1D SUMIFS
+	if len(remaining) > 0 {
+		patterns1D := f.groupSUMIFS1DByPattern(remaining)
+		for _, pattern := range patterns1D {
+			if len(pattern.formulas) >= 10 {
+				patternResults := f.calculateSUMIFS1DPatternWithCache(pattern, worksheetCache)
+				for cell, value := range patternResults {
+					results[cell] = fmt.Sprintf("%v", value)
+				}
+			}
+		}
+	}
+
+	return results
+}
+
+// calculateSUMIFS1DPatternWithCache calculates 1D SUMIFS using worksheetCache
+func (f *File) calculateSUMIFS1DPatternWithCache(pattern *sumifs1DPattern, worksheetCache *WorksheetCache) map[string]float64 {
+	sourceSheet := extractSheetName(pattern.sumRangeRef)
+	if sourceSheet == "" {
+		return map[string]float64{}
+	}
+
+	sumCol := extractColumnFromRange(pattern.sumRangeRef)
+	criteria1Col := extractColumnFromRange(pattern.criteriaRange1Ref)
+
+	if sumCol == "" || criteria1Col == "" {
+		return map[string]float64{}
+	}
+
+	// Read source data directly from file
+	rows, err := f.GetRows(sourceSheet, Options{RawCellValue: true})
+	if err != nil {
+		return map[string]float64{}
+	}
+
+	// Build 1D result map: criteria1Value -> sum
+	sumColIdx, _ := ColumnNameToNumber(sumCol)
+	sumColIdx--
+	criteria1ColIdx, _ := ColumnNameToNumber(criteria1Col)
+	criteria1ColIdx--
+
+	resultMap := make(map[string]float64)
+	for _, row := range rows {
+		if criteria1ColIdx >= len(row) || sumColIdx >= len(row) {
+			continue
+		}
+
+		c1 := row[criteria1ColIdx]
+		sumVal := row[sumColIdx]
+
+		if sumVal != "" {
+			if v, err := strconv.ParseFloat(sumVal, 64); err == nil {
+				resultMap[c1] += v
+			}
+		}
+	}
+
+	// Fill results for all formulas
+	results := make(map[string]float64)
+	for fullCell, info := range pattern.formulas {
+		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
+
+		// Get criteria value from worksheetCache or cell
+		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell, worksheetCache)
+
+		if val, ok := resultMap[c1]; ok {
+			results[fullCell] = val
+		} else {
+			results[fullCell] = 0
 		}
 	}
 
@@ -969,7 +1049,6 @@ func (f *File) detectAndCalculateBatchINDEX() map[string]float64 {
 
 		// If we have at least 10 INDEX formulas, try batch optimization
 		if len(indexFormulas) >= 10 {
-			log.Printf("  🔍 [INDEX Batch] Found %d INDEX formulas in sheet '%s', analyzing patterns...", len(indexFormulas), sheet)
 			batchResults := f.calculateIndexFormulas(sheet, indexFormulas)
 			for cell, value := range batchResults {
 				results[cell] = value

@@ -160,21 +160,22 @@ func (f *File) CalcCellValueWithSubExprCache(sheet, cell, formula string, subExp
 		}
 	}
 
+	// Evaluate the formula
+	var result string
+	var err error
+
 	// If we replaced sub-expressions, evaluate the simplified formula
 	if replacements > 0 {
-		return f.evalFormulaString(sheet, cell, modifiedFormula, worksheetCache, opts)
-	}
-
-	// No cached sub-expressions found
-	// If there were SUMIFS/AVERAGEIFS/INDEX-MATCH but we didn't cache them, we need to calculate normally
-	// This will be slower but ensures correctness
-	if missedCount > 0 {
+		result, err = f.evalFormulaString(sheet, cell, modifiedFormula, worksheetCache, opts)
+	} else if missedCount > 0 {
 		// Cache miss - use evalFormulaString to keep worksheetCache
-		return f.evalFormulaString(sheet, cell, formula, worksheetCache, opts)
+		result, err = f.evalFormulaString(sheet, cell, formula, worksheetCache, opts)
+	} else {
+		// No SUMIFS/AVERAGEIFS/INDEX-MATCH in this formula, use evalFormulaString with worksheetCache
+		result, err = f.evalFormulaString(sheet, cell, formula, worksheetCache, opts)
 	}
 
-	// No SUMIFS/AVERAGEIFS/INDEX-MATCH in this formula, use evalFormulaString with worksheetCache
-	return f.evalFormulaString(sheet, cell, formula, worksheetCache, opts)
+	return result, err
 }
 
 // evalFormulaString evaluates a formula string directly (without reading from cell)
@@ -193,7 +194,6 @@ func (f *File) evalFormulaString(sheet, cell, formula string, worksheetCache *Wo
 		return value.(string), nil
 	}
 
-	// Parse and evaluate the formula
 	ps := efp.ExcelParser()
 	tokens := ps.Parse(formula)
 	if tokens == nil {
@@ -210,7 +210,6 @@ func (f *File) evalFormulaString(sheet, cell, formula string, worksheetCache *Wo
 		worksheetCache: worksheetCache, // Pass worksheetCache to formula engine
 	}
 
-	// Evaluate the parsed tokens using the same logic as calcCellValue
 	result, err := f.evalInfixExp(ctx, sheet, cell, tokens)
 	if err != nil {
 		return "", err

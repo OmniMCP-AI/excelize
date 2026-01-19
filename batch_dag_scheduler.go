@@ -9,13 +9,6 @@ import (
 	"time"
 )
 
-// slowFormulaInfo records information about slow formulas
-type slowFormulaInfo struct {
-	cell     string
-	duration time.Duration
-	formula  string
-}
-
 // DAGScheduler implements a dynamic dependency-aware scheduler
 // that executes formulas as soon as their dependencies are satisfied
 type DAGScheduler struct {
@@ -33,15 +26,6 @@ type DAGScheduler struct {
 	queueClosed     atomic.Bool         // 标记队列是否已关闭
 	subExprCache    *SubExpressionCache // 子表达式缓存（用于复合公式）
 	worksheetCache  *WorksheetCache     // 统一的worksheet缓存（用于存储所有计算结果）
-
-	// Slow formula tracking
-	slowFormulas  []slowFormulaInfo
-	slowFormulaMu sync.Mutex
-
-	// Cache hit statistics
-	cacheHitCount   atomic.Int64 // worksheetCache 命中次数
-	calcCacheHit    atomic.Int64 // calcCache 命中次数
-	cacheMissCount  atomic.Int64 // 缓存未命中次数
 }
 
 // NewDAGScheduler creates a new DAG scheduler
@@ -210,57 +194,26 @@ func (scheduler *DAGScheduler) Run() {
 		defer ticker.Stop()
 		lastCompleted := int64(0)
 		stallCount := 0
-		reportCount := 0
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				reportCount++
 				currentCompleted := scheduler.completedCount.Load()
 				inFlight := scheduler.inFlightCount.Load()
 				queueLen := len(scheduler.readyQueue)
 				elapsed := time.Since(startTime)
 				rate := float64(currentCompleted) / elapsed.Seconds()
 
-				// 获取缓存命中统计
-				wsHit := scheduler.cacheHitCount.Load()
-				calcHit := scheduler.calcCacheHit.Load()
-				miss := scheduler.cacheMissCount.Load()
-				total := wsHit + calcHit + miss
-				hitRate := float64(0)
-				if total > 0 {
-					hitRate = float64(wsHit+calcHit) * 100 / float64(total)
-				}
-
-				// 每次都报告进度（包含缓存统计）
-				log.Printf("  📊 [Progress] %d/%d (%.1f%%) completed, %d in-flight, %d queued, %.1f/sec | Cache: ws=%d, calc=%d, miss=%d (%.1f%% hit)",
+				log.Printf("  📊 [Progress] %d/%d (%.1f%%) completed, %d in-flight, %d queued, %.1f/sec",
 					currentCompleted, scheduler.totalFormulas,
 					float64(currentCompleted)*100/float64(scheduler.totalFormulas),
-					inFlight, queueLen, rate,
-					wsHit, calcHit, miss, hitRate)
+					inFlight, queueLen, rate)
 
 				// 检查是否停滞
 				if currentCompleted == lastCompleted && inFlight == 0 && currentCompleted < int64(scheduler.totalFormulas) {
 					stallCount++
 					log.Printf("  ⚠️ [Progress] Stall detected: no progress for %d checks", stallCount)
-
-					// 打印等待中的公式示例
-					if stallCount == 1 {
-						blockedCount := 0
-						for cell, depCount := range scheduler.dependencyCount {
-							if depCount > 0 && blockedCount < 3 {
-								if node, exists := scheduler.graph.nodes[cell]; exists {
-									formulaPreview := node.formula
-									if len(formulaPreview) > 80 {
-										formulaPreview = formulaPreview[:80] + "..."
-									}
-									log.Printf("    Blocked: %s (waiting for %d deps) = %s", cell, depCount, formulaPreview)
-								}
-								blockedCount++
-							}
-						}
-					}
 
 					if stallCount >= 6 { // 30秒后强制关闭
 						log.Printf("⚠️ [DAG Scheduler] Forcing close after stall")
@@ -286,37 +239,6 @@ func (scheduler *DAGScheduler) Run() {
 	} else {
 		log.Printf("✅ [DAG Scheduler] Completed in %v", duration)
 	}
-
-	// 输出慢速公式统计
-	if len(scheduler.slowFormulas) > 0 {
-		// Sort by duration (descending)
-		sortedSlowFormulas := make([]slowFormulaInfo, len(scheduler.slowFormulas))
-		copy(sortedSlowFormulas, scheduler.slowFormulas)
-
-		// Simple bubble sort for top N
-		for i := 0; i < len(sortedSlowFormulas); i++ {
-			for j := i + 1; j < len(sortedSlowFormulas); j++ {
-				if sortedSlowFormulas[j].duration > sortedSlowFormulas[i].duration {
-					sortedSlowFormulas[i], sortedSlowFormulas[j] = sortedSlowFormulas[j], sortedSlowFormulas[i]
-				}
-			}
-		}
-
-		topN := 20
-		if len(sortedSlowFormulas) < topN {
-			topN = len(sortedSlowFormulas)
-		}
-
-		log.Printf("\n🐌 [Slow Formulas] Found %d formulas taking >5ms, showing top %d:", len(scheduler.slowFormulas), topN)
-		for i := 0; i < topN; i++ {
-			info := sortedSlowFormulas[i]
-			displayFormula := info.formula
-			if len(displayFormula) > 100 {
-				displayFormula = displayFormula[:100] + "..."
-			}
-			log.Printf("  %d. %s: %v - %s", i+1, info.cell, info.duration, displayFormula)
-		}
-	}
 }
 
 // worker processes formulas from the ready queue
@@ -336,7 +258,6 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	// Parse cell reference
 	parts := strings.Split(cell, "!")
 	if len(parts) != 2 {
-		log.Printf("⚠️ [DAG Scheduler] Invalid cell reference: %s", cell)
 		scheduler.notifyDependents(cell)
 		scheduler.markFormulaDone()
 		return
@@ -345,16 +266,11 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	sheet := parts[0]
 	cellName := parts[1]
 
-	// ========================================
 	// 优化：先检查 worksheetCache 是否已有批量预计算的结果
-	// ========================================
 	if scheduler.worksheetCache != nil {
 		if cachedArg, found := scheduler.worksheetCache.Get(sheet, cellName); found {
-			// 批量优化已经计算过了，直接使用缓存结果
-			scheduler.cacheHitCount.Add(1)
 			value := cachedArg.Value()
 			scheduler.results.Store(cell, value)
-			// 需要写回 worksheet XML，确保结果持久化
 			scheduler.f.setFormulaValue(sheet, cellName, value)
 			scheduler.notifyDependents(cell)
 			scheduler.markFormulaDone()
@@ -366,7 +282,6 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	cacheKey := cell + "!raw=true"
 	if cached, ok := scheduler.f.calcCache.Load(cacheKey); ok {
 		if value, isStr := cached.(string); isStr {
-			scheduler.calcCacheHit.Add(1)
 			scheduler.results.Store(cell, value)
 			scheduler.f.setFormulaValue(sheet, cellName, value)
 			scheduler.notifyDependents(cell)
@@ -375,47 +290,18 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 		}
 	}
 
-	// 缓存未命中，需要计算
-	scheduler.cacheMissCount.Add(1)
-
 	// 获取公式（从 graph 中，避免重复读取）
 	formula := ""
 	if node, exists := scheduler.graph.nodes[cell]; exists {
 		formula = node.formula
 	}
 
-	// DEBUG: 前10个缓存未命中的详细信息
-	missCount := scheduler.cacheMissCount.Load()
-	if missCount <= 10 {
-		formulaPreview := formula
-		if len(formulaPreview) > 100 {
-			formulaPreview = formulaPreview[:100] + "..."
-		}
-		log.Printf("  🔍 [Cache Miss #%d] cell=%s, sheet='%s', cellName='%s', formula=%s",
-			missCount, cell, sheet, cellName, formulaPreview)
-	}
-
 	// 使用带子表达式缓存的计算
 	opts := Options{RawCellValue: true, MaxCalcIterations: 100}
-	calcStart := time.Now()
 
 	value, err := scheduler.f.CalcCellValueWithSubExprCache(sheet, cellName, formula, scheduler.subExprCache, scheduler.worksheetCache, opts)
-	calcDuration := time.Since(calcStart)
-
-	// 记录慢速公式（超过5ms）
-	if calcDuration > 5*time.Millisecond {
-		scheduler.slowFormulaMu.Lock()
-		scheduler.slowFormulas = append(scheduler.slowFormulas, slowFormulaInfo{
-			cell:     cell,
-			duration: calcDuration,
-			formula:  formula,
-		})
-		scheduler.slowFormulaMu.Unlock()
-	}
 
 	if err != nil {
-		// 计算失败，仍然标记为完成，但不缓存结果
-		// 这样依赖它的公式仍然可以继续（可能会读到空值或错误）
 		scheduler.notifyDependents(cell)
 		scheduler.markFormulaDone()
 		return
