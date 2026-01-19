@@ -61,6 +61,22 @@ func (wc *WorksheetCache) GetSheet(sheet string) map[string]formulaArg {
 	return make(map[string]formulaArg)
 }
 
+// GetCacheStats 返回缓存统计信息（用于调试）
+func (wc *WorksheetCache) GetCacheStats() map[string]int {
+	wc.mu.RLock()
+	defer wc.mu.RUnlock()
+
+	stats := make(map[string]int)
+	total := 0
+	for sheet, sheetCache := range wc.cache {
+		count := len(sheetCache)
+		stats[sheet] = count
+		total += count
+	}
+	stats["_total"] = total
+	return stats
+}
+
 // inferCellValueType 根据单元格的原始值推断其类型并转换为 formulaArg
 // 这是 Phase 1 的核心：保留类型信息而不是只存字符串
 func inferCellValueType(val string, cellType CellType) formulaArg {

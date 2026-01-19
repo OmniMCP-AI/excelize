@@ -37,6 +37,11 @@ type DAGScheduler struct {
 	// Slow formula tracking
 	slowFormulas  []slowFormulaInfo
 	slowFormulaMu sync.Mutex
+
+	// Cache hit statistics
+	cacheHitCount   atomic.Int64 // worksheetCache 命中次数
+	calcCacheHit    atomic.Int64 // calcCache 命中次数
+	cacheMissCount  atomic.Int64 // 缓存未命中次数
 }
 
 // NewDAGScheduler creates a new DAG scheduler
@@ -160,9 +165,30 @@ func (scheduler *DAGScheduler) Run() {
 	startTime := time.Now()
 	log.Printf("🚀 [DAG Scheduler] Starting: %d formulas with %d workers", scheduler.totalFormulas, scheduler.numWorkers)
 
+	// 统计初始 ready queue 中有多少公式
+	initialReady := len(scheduler.readyQueue)
+	log.Printf("  📊 [DAG Scheduler] Initial ready queue size: %d formulas (no dependencies)", initialReady)
+
 	// 边界情况：空图直接返回
 	if scheduler.totalFormulas == 0 {
 		log.Printf("✅ [DAG Scheduler] No formulas to calculate, exiting immediately")
+		return
+	}
+
+	// 检查是否有依赖问题（如果没有任何公式准备好）
+	if initialReady == 0 && scheduler.totalFormulas > 0 {
+		log.Printf("⚠️ [DAG Scheduler] WARNING: No formulas ready! Possible circular dependency or dependency issue")
+		// 打印一些有依赖的公式示例
+		count := 0
+		for cell, depCount := range scheduler.dependencyCount {
+			if depCount > 0 && count < 5 {
+				if node, exists := scheduler.graph.nodes[cell]; exists {
+					log.Printf("    Example blocked formula: %s (waiting for %d deps) = %s", cell, depCount, node.formula[:min(100, len(node.formula))])
+					log.Printf("      Dependencies: %v", node.dependencies[:min(5, len(node.dependencies))])
+				}
+				count++
+			}
+		}
 		return
 	}
 
@@ -177,26 +203,67 @@ func (scheduler *DAGScheduler) Run() {
 		go scheduler.worker(&wg, i)
 	}
 
-	// 启动死锁检测 goroutine
+	// 启动进度报告和死锁检测 goroutine
 	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(5 * time.Second) // 每5秒报告一次进度
 		defer ticker.Stop()
 		lastCompleted := int64(0)
 		stallCount := 0
+		reportCount := 0
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
+				reportCount++
 				currentCompleted := scheduler.completedCount.Load()
 				inFlight := scheduler.inFlightCount.Load()
+				queueLen := len(scheduler.readyQueue)
+				elapsed := time.Since(startTime)
+				rate := float64(currentCompleted) / elapsed.Seconds()
+
+				// 获取缓存命中统计
+				wsHit := scheduler.cacheHitCount.Load()
+				calcHit := scheduler.calcCacheHit.Load()
+				miss := scheduler.cacheMissCount.Load()
+				total := wsHit + calcHit + miss
+				hitRate := float64(0)
+				if total > 0 {
+					hitRate = float64(wsHit+calcHit) * 100 / float64(total)
+				}
+
+				// 每次都报告进度（包含缓存统计）
+				log.Printf("  📊 [Progress] %d/%d (%.1f%%) completed, %d in-flight, %d queued, %.1f/sec | Cache: ws=%d, calc=%d, miss=%d (%.1f%% hit)",
+					currentCompleted, scheduler.totalFormulas,
+					float64(currentCompleted)*100/float64(scheduler.totalFormulas),
+					inFlight, queueLen, rate,
+					wsHit, calcHit, miss, hitRate)
+
+				// 检查是否停滞
 				if currentCompleted == lastCompleted && inFlight == 0 && currentCompleted < int64(scheduler.totalFormulas) {
 					stallCount++
-					if stallCount >= 2 {
-						// 连续两次检测到停滞，可能存在死锁
-						log.Printf("⚠️ [DAG Scheduler] Detected stall: completed=%d/%d, inFlight=%d, forcing close",
-							currentCompleted, scheduler.totalFormulas, inFlight)
+					log.Printf("  ⚠️ [Progress] Stall detected: no progress for %d checks", stallCount)
+
+					// 打印等待中的公式示例
+					if stallCount == 1 {
+						blockedCount := 0
+						for cell, depCount := range scheduler.dependencyCount {
+							if depCount > 0 && blockedCount < 3 {
+								if node, exists := scheduler.graph.nodes[cell]; exists {
+									formulaPreview := node.formula
+									if len(formulaPreview) > 80 {
+										formulaPreview = formulaPreview[:80] + "..."
+									}
+									log.Printf("    Blocked: %s (waiting for %d deps) = %s", cell, depCount, formulaPreview)
+								}
+								blockedCount++
+							}
+						}
+					}
+
+					if stallCount >= 6 { // 30秒后强制关闭
+						log.Printf("⚠️ [DAG Scheduler] Forcing close after stall")
 						scheduler.closeReadyQueue()
 						return
 					}
@@ -278,10 +345,54 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 	sheet := parts[0]
 	cellName := parts[1]
 
+	// ========================================
+	// 优化：先检查 worksheetCache 是否已有批量预计算的结果
+	// ========================================
+	if scheduler.worksheetCache != nil {
+		if cachedArg, found := scheduler.worksheetCache.Get(sheet, cellName); found {
+			// 批量优化已经计算过了，直接使用缓存结果
+			scheduler.cacheHitCount.Add(1)
+			value := cachedArg.Value()
+			scheduler.results.Store(cell, value)
+			// 需要写回 worksheet XML，确保结果持久化
+			scheduler.f.setFormulaValue(sheet, cellName, value)
+			scheduler.notifyDependents(cell)
+			scheduler.markFormulaDone()
+			return
+		}
+	}
+
+	// 也检查 calcCache（兼容旧的缓存路径）
+	cacheKey := cell + "!raw=true"
+	if cached, ok := scheduler.f.calcCache.Load(cacheKey); ok {
+		if value, isStr := cached.(string); isStr {
+			scheduler.calcCacheHit.Add(1)
+			scheduler.results.Store(cell, value)
+			scheduler.f.setFormulaValue(sheet, cellName, value)
+			scheduler.notifyDependents(cell)
+			scheduler.markFormulaDone()
+			return
+		}
+	}
+
+	// 缓存未命中，需要计算
+	scheduler.cacheMissCount.Add(1)
+
 	// 获取公式（从 graph 中，避免重复读取）
 	formula := ""
 	if node, exists := scheduler.graph.nodes[cell]; exists {
 		formula = node.formula
+	}
+
+	// DEBUG: 前10个缓存未命中的详细信息
+	missCount := scheduler.cacheMissCount.Load()
+	if missCount <= 10 {
+		formulaPreview := formula
+		if len(formulaPreview) > 100 {
+			formulaPreview = formulaPreview[:100] + "..."
+		}
+		log.Printf("  🔍 [Cache Miss #%d] cell=%s, sheet='%s', cellName='%s', formula=%s",
+			missCount, cell, sheet, cellName, formulaPreview)
 	}
 
 	// 使用带子表达式缓存的计算

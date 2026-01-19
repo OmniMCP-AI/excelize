@@ -977,3 +977,213 @@ func TestExtractDependenciesOptimizedColumnRange(t *testing.T) {
 		}
 	})
 }
+
+// TestConcurrentFormulaCalculationRace tests that parallel formula calculation
+// does not cause data races when multiple goroutines access worksheet data.
+// This test should be run with -race flag: go test -race -run TestConcurrentFormulaCalculationRace
+func TestConcurrentFormulaCalculationRace(t *testing.T) {
+	t.Run("RecalculateAllWithDependency_NoRace", func(t *testing.T) {
+		// Create a file with multiple formulas that depend on each other
+		f := NewFile()
+
+		// Set up data
+		for i := 1; i <= 10; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i*10)
+		}
+
+		// Set up formulas with dependencies
+		// B column depends on A column
+		for i := 1; i <= 10; i++ {
+			f.SetCellFormula("Sheet1", "B"+itoa(i), "=A"+itoa(i)+"*2")
+		}
+
+		// C column depends on B column
+		for i := 1; i <= 10; i++ {
+			f.SetCellFormula("Sheet1", "C"+itoa(i), "=B"+itoa(i)+"+10")
+		}
+
+		// D column uses SUM across multiple cells
+		f.SetCellFormula("Sheet1", "D1", "=SUM(A1:A10)")
+		f.SetCellFormula("Sheet1", "D2", "=SUM(B1:B10)")
+		f.SetCellFormula("Sheet1", "D3", "=SUM(C1:C10)")
+
+		// Run recalculation - this should not cause race conditions
+		err := f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("RecalculateAllWithDependency failed: %v", err)
+		}
+
+		// Verify results
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		if d1 != "550" { // 10+20+30+...+100 = 550
+			t.Errorf("expected D1=550, got %s", d1)
+		}
+	})
+
+	t.Run("RecalculateAllWithDependency_CrossSheet_NoRace", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+		f.NewSheet("Calc")
+
+		// Set up data in Data sheet
+		for i := 1; i <= 20; i++ {
+			f.SetCellValue("Data", "A"+itoa(i), i)
+			f.SetCellValue("Data", "B"+itoa(i), i*2)
+		}
+
+		// Set up cross-sheet formulas in Calc sheet
+		for i := 1; i <= 10; i++ {
+			f.SetCellFormula("Calc", "A"+itoa(i), "=Data!A"+itoa(i)+"*3")
+			f.SetCellFormula("Calc", "B"+itoa(i), "=Data!B"+itoa(i)+"+Calc!A"+itoa(i))
+		}
+
+		// Run recalculation - cross-sheet access should not cause race
+		err := f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("RecalculateAllWithDependency failed: %v", err)
+		}
+	})
+
+	t.Run("BatchUpdateValuesAndFormulasWithRecalc_Concurrent_NoRace", func(t *testing.T) {
+		f := NewFile()
+
+		// Set up initial data
+		for i := 1; i <= 10; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i)
+			f.SetCellFormula("Sheet1", "B"+itoa(i), "=A"+itoa(i)+"*2")
+			f.SetCellFormula("Sheet1", "C"+itoa(i), "=B"+itoa(i)+"+A"+itoa(i))
+		}
+
+		// Initial calculation
+		f.RecalculateAllWithDependency()
+
+		// Batch update with value and formula changes
+		valueUpdates := []CellUpdate{
+			{Sheet: "Sheet1", Cell: "A1", Value: 100},
+			{Sheet: "Sheet1", Cell: "A2", Value: 200},
+		}
+		formulaUpdates := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B3", Formula: "=A3*10"},
+			{Sheet: "Sheet1", Cell: "B4", Formula: "=A4*10"},
+		}
+
+		// This should not cause race conditions
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(valueUpdates, formulaUpdates)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// Verify A1 update propagated
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		// C1 = B1 + A1 = (A1*2) + A1 = 100*2 + 100 = 300
+		if c1 != "300" {
+			t.Errorf("expected C1=300 after update, got %s", c1)
+		}
+	})
+
+	t.Run("PreCalculateSimpleFormulas_Parallel_NoRace", func(t *testing.T) {
+		f := NewFile()
+
+		// Create many simple formulas to trigger parallel calculation
+		for i := 1; i <= 50; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i)
+		}
+
+		// Simple formulas that will be pre-calculated in parallel
+		for i := 1; i <= 50; i++ {
+			// Simple arithmetic formulas (not SUMIFS/INDEX-MATCH)
+			f.SetCellFormula("Sheet1", "B"+itoa(i), "=A"+itoa(i)+"*2+1")
+		}
+
+		// Dependent formulas
+		for i := 1; i <= 50; i++ {
+			f.SetCellFormula("Sheet1", "C"+itoa(i), "=B"+itoa(i)+"+A"+itoa(i))
+		}
+
+		// Run recalculation - parallel pre-calculation should not race
+		err := f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("RecalculateAllWithDependency failed: %v", err)
+		}
+
+		// Verify a few results
+		// B1 = A1*2+1 = 1*2+1 = 3
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "3" {
+			t.Errorf("expected B1=3, got %s", b1)
+		}
+
+		// C1 = B1 + A1 = 3 + 1 = 4
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "4" {
+			t.Errorf("expected C1=4, got %s", c1)
+		}
+	})
+
+	t.Run("ArrayFormulaCells_PreCheck_NoRace", func(t *testing.T) {
+		// Test that setArrayFormulaCells is called before parallel calculation
+		// to avoid race conditions when getCellFormulaReadOnly triggers it
+		f := NewFile()
+
+		// Set up data and formulas
+		for i := 1; i <= 20; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i)
+			f.SetCellFormula("Sheet1", "B"+itoa(i), "=A"+itoa(i)+"*2")
+		}
+
+		// First recalculation should set formulaChecked = true
+		err := f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("First RecalculateAllWithDependency failed: %v", err)
+		}
+
+		// Modify some values
+		for i := 1; i <= 20; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i*10)
+		}
+
+		// Second recalculation should not trigger setArrayFormulaCells again
+		// because formulaChecked is already true
+		err = f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("Second RecalculateAllWithDependency failed: %v", err)
+		}
+	})
+
+	t.Run("MultipleRecalculations_NoRace", func(t *testing.T) {
+		// Test multiple sequential recalculations don't cause race
+		f := NewFile()
+
+		for i := 1; i <= 30; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i)
+			f.SetCellFormula("Sheet1", "B"+itoa(i), "=A"+itoa(i)+"*2")
+			f.SetCellFormula("Sheet1", "C"+itoa(i), "=B"+itoa(i)+"+A"+itoa(i))
+		}
+
+		// Multiple recalculations
+		for round := 0; round < 3; round++ {
+			err := f.RecalculateAllWithDependency()
+			if err != nil {
+				t.Fatalf("RecalculateAllWithDependency round %d failed: %v", round, err)
+			}
+
+			// Update some values between rounds
+			for i := 1; i <= 10; i++ {
+				f.SetCellValue("Sheet1", "A"+itoa(i), (round+1)*i*10)
+			}
+		}
+	})
+}
+
+// itoa converts int to string for cell references
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	result := ""
+	for i > 0 {
+		result = string(rune('0'+i%10)) + result
+		i /= 10
+	}
+	return result
+}

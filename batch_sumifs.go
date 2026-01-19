@@ -88,6 +88,12 @@ func (f *File) detectAndCalculateBatchSUMIFS() map[string]float64 {
 		results[cell] = value
 	}
 
+	// Detect and calculate AVERAGE(OFFSET) patterns
+	avgOffsetResults := f.detectAndCalculateBatchAverageOffset()
+	for cell, value := range avgOffsetResults {
+		results[cell] = value
+	}
+
 	// Scan all sheets to find SUMIFS formulas
 	// Strategy: Sample cells to detect patterns, then batch calculate
 	sheetList := f.GetSheetList()

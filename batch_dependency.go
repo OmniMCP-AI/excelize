@@ -3,6 +3,7 @@ package excelize
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -169,19 +170,78 @@ func (f *File) buildDependencyGraph() *dependencyGraph {
 
 	log.Printf("  📊 [Dependency Analysis] Built column index: %d columns with formulas", len(columnIndex))
 
-	// Step 3: Extract dependencies with smart column resolution
+	// Step 3: Extract dependencies with smart column resolution (PARALLELIZED)
+	log.Printf("  📊 [Dependency Analysis] Extracting dependencies for %d formulas (parallel)...", len(formulasToProcess))
+	extractStart := time.Now()
+
+	// Use worker pool for parallel dependency extraction
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 16 {
+		numWorkers = 16 // Cap at 16 workers
+	}
+
+	type depResult struct {
+		fullCell string
+		deps     []string
+	}
+
+	// Channel for work distribution
+	workChan := make(chan struct {
+		fullCell string
+		sheet    string
+		cellRef  string
+		formula  string
+	}, len(formulasToProcess))
+
+	// Channel for results
+	resultChan := make(chan depResult, len(formulasToProcess))
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for info := range workChan {
+				deps := extractDependenciesOptimized(info.formula, info.sheet, info.cellRef, columnIndex, graph.columnMetadata)
+				resultChan <- depResult{fullCell: info.fullCell, deps: deps}
+			}
+		}()
+	}
+
+	// Send work to workers
+	go func() {
+		for _, info := range formulasToProcess {
+			workChan <- info
+		}
+		close(workChan)
+	}()
+
+	// Wait for all workers to finish, then close result channel
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
 	debugCells := map[string]bool{"补货汇总!I3": true, "补货汇总!J3": true, "补货汇总!I2": true, "补货汇总!I4": true}
-	for _, info := range formulasToProcess {
-		deps := extractDependenciesOptimized(info.formula, info.sheet, info.cellRef, columnIndex, graph.columnMetadata)
-		graph.nodes[info.fullCell].dependencies = deps
+	processedCount := 0
+	for result := range resultChan {
+		graph.nodes[result.fullCell].dependencies = result.deps
+		processedCount++
 
 		// Debug: 检查特定单元格的依赖
-		if debugCells[info.fullCell] {
-			log.Printf("  🔍 [DEBUG] %s 依赖: %v", info.fullCell, deps)
+		if debugCells[result.fullCell] {
+			log.Printf("  🔍 [DEBUG] %s 依赖: %v", result.fullCell, result.deps)
+		}
+
+		// Progress logging
+		if processedCount%500000 == 0 {
+			log.Printf("    📊 [Dependency Extraction] Processed %d/%d formulas...", processedCount, len(formulasToProcess))
 		}
 	}
 
-	log.Printf("  📊 [Dependency Analysis] Extracted dependencies")
+	log.Printf("  📊 [Dependency Analysis] Extracted dependencies in %v (parallel with %d workers)", time.Since(extractStart), numWorkers)
 
 	// Step 4: Assign levels using topological sort
 	graph.assignLevels()
@@ -237,14 +297,19 @@ func minInt(a, b int) int {
 }
 
 // assignLevels assigns each node a level based on its dependencies
-// Optimized: Handles virtual column dependencies (COLUMN:Sheet!Col)
+// Optimized: Uses BFS-based topological sort with reverse dependency index for O(n) complexity
 func (g *dependencyGraph) assignLevels() {
-	// Build reverse mapping: column -> max level of formulas in that column
-	// This is used to resolve virtual column dependencies
-	columnMaxLevel := make(map[string]int) // "Sheet!Col" -> max level
+	startTime := time.Now()
+	log.Printf("  📊 [Level Assignment] Starting parallel level assignment for %d nodes...", len(g.nodes))
 
-	// Pre-populate columnMaxLevel with -1 for all columns that have formulas
-	// This ensures virtual dependencies are properly tracked from the start
+	// Step 1: Build column membership map and reverse dependency index
+	cellToColumn := make(map[string]string)        // cell -> column key
+	columnMaxLevel := make(map[string]int)         // column -> max level
+	columnUnresolvedCount := make(map[string]int)  // column -> count of unresolved cells
+	reverseDeps := make(map[string][]string)       // dependency -> list of cells that depend on it
+	reverseColumnDeps := make(map[string][]string) // column -> list of cells that have COLUMN: dependency on it
+
+	// Pre-compute column keys and count cells per column
 	for cellRef := range g.nodes {
 		parts := strings.Split(cellRef, "!")
 		if len(parts) == 2 {
@@ -257,161 +322,147 @@ func (g *dependencyGraph) assignLevels() {
 				}
 			}
 			colKey := parts[0] + "!" + col
-			if _, exists := columnMaxLevel[colKey]; !exists {
-				columnMaxLevel[colKey] = -1 // Mark as "has formulas but not yet resolved"
-			}
+			cellToColumn[cellRef] = colKey
+			columnMaxLevel[colKey] = -1
+			columnUnresolvedCount[colKey]++ // Count cells per column
 		}
 	}
 
-	// Debug: 检查特定列是否在 columnMaxLevel 中
-	for _, colKey := range []string{"补货计划!G", "补货计划!J", "补货汇总!I", "补货汇总!J"} {
-		if level, exists := columnMaxLevel[colKey]; exists {
-			log.Printf("  🔍 [DEBUG assignLevels] columnMaxLevel[%s] = %d", colKey, level)
-		} else {
-			log.Printf("  🔍 [DEBUG assignLevels] columnMaxLevel[%s] 不存在！", colKey)
-		}
-	}
-
-	// Helper function to check if a dependency is resolved
-	isDependencyResolved := func(dep string) (bool, int) {
-		if strings.HasPrefix(dep, "COLUMN:") {
-			// Virtual column dependency
-			colKey := strings.TrimPrefix(dep, "COLUMN:")
-			if level, exists := columnMaxLevel[colKey]; exists {
-				if level >= 0 {
-					return true, level // Column is fully resolved
-				}
-				// Column has formulas but not yet resolved
-				return false, -1
-			}
-			// Column not in our tracking - pure data column
-			return true, -1
-		}
-
-		// Regular cell dependency
-		if depNode, exists := g.nodes[dep]; exists {
-			if depNode.level >= 0 {
-				return true, depNode.level
-			}
-			return false, -1
-		}
-		// Not a formula cell, treat as resolved
-		return true, -1
-	}
-
-	// Find nodes with no dependencies (level 0)
-	// IMPORTANT: 两阶段处理，避免遍历顺序导致的竞态问题
-	// 阶段1：收集所有没有未解决依赖的节点
-	level0Candidates := make([]string, 0)
-	debugCells2 := map[string]bool{"补货汇总!I3": true, "补货汇总!J3": true, "补货汇总!I2": true, "补货汇总!I4": true}
+	// Build reverse dependency index
 	for cell, node := range g.nodes {
-		hasDeps := false
 		for _, dep := range node.dependencies {
-			resolved, _ := isDependencyResolved(dep)
-			// Debug: 检查特定单元格的依赖解析
-			if debugCells2[cell] {
-				log.Printf("  🔍 [DEBUG Level0] %s 依赖 %s: resolved=%v", cell, dep, resolved)
-			}
-			if !resolved {
-				hasDeps = true
-				break
-			}
-		}
-
-		if !hasDeps {
-			level0Candidates = append(level0Candidates, cell)
-			if debugCells2[cell] {
-				log.Printf("  🔍 [DEBUG Level0] %s 被标记为 Level 0 候选！", cell)
+			if strings.HasPrefix(dep, "COLUMN:") {
+				colKey := strings.TrimPrefix(dep, "COLUMN:")
+				reverseColumnDeps[colKey] = append(reverseColumnDeps[colKey], cell)
+			} else {
+				reverseDeps[dep] = append(reverseDeps[dep], cell)
 			}
 		}
 	}
 
-	// 阶段2：统一设置level，避免在遍历过程中level被修改
-	level0 := make([]string, 0)
-	for _, cell := range level0Candidates {
-		node := g.nodes[cell]
-		node.level = 0
-		level0 = append(level0, cell)
-	}
+	log.Printf("    📊 [Level Assignment] Built reverse index in %v", time.Since(startTime))
 
-	g.levels = append(g.levels, level0)
+	// Step 2: Calculate unresolved dependency count for each node
+	unresolvedCount := make(map[string]int)           // cell -> number of unresolved dependencies
+	unresolvedColDeps := make(map[string]map[string]bool) // cell -> set of unresolved column dependencies
 
-	// Update column max levels for level 0
-	for _, cell := range level0 {
-		parts := strings.Split(cell, "!")
-		if len(parts) == 2 {
-			col := ""
-			for _, ch := range parts[1] {
-				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
-					col += string(ch)
-				} else {
-					break
+	for cell, node := range g.nodes {
+		count := 0
+		colDeps := make(map[string]bool)
+
+		for _, dep := range node.dependencies {
+			if strings.HasPrefix(dep, "COLUMN:") {
+				colKey := strings.TrimPrefix(dep, "COLUMN:")
+				// Check if this column has any formula cells
+				if _, hasFormulas := columnMaxLevel[colKey]; hasFormulas {
+					colDeps[colKey] = true
+					count++
+				}
+			} else {
+				// Regular cell dependency
+				if _, isFormula := g.nodes[dep]; isFormula {
+					count++
 				}
 			}
-			colKey := parts[0] + "!" + col
-			if columnMaxLevel[colKey] < 0 {
-				columnMaxLevel[colKey] = 0
-			}
+		}
+
+		unresolvedCount[cell] = count
+		if len(colDeps) > 0 {
+			unresolvedColDeps[cell] = colDeps
 		}
 	}
 
-	// Iteratively assign levels
-	maxIterations := len(g.nodes)
-	for iteration := 0; iteration < maxIterations; iteration++ {
-		anyAssigned := false
+	log.Printf("    📊 [Level Assignment] Calculated unresolved counts in %v", time.Since(startTime))
 
-		for cell, node := range g.nodes {
-			if node.level != -1 {
+	// Step 3: BFS-based level assignment
+	currentLevel := make([]string, 0)
+	for cell := range g.nodes {
+		if unresolvedCount[cell] == 0 {
+			currentLevel = append(currentLevel, cell)
+		}
+	}
+
+	level := 0
+	processedCount := 0
+
+	for len(currentLevel) > 0 {
+		// Assign level to all nodes in current batch
+		for _, cell := range currentLevel {
+			g.nodes[cell].level = level
+
+			// Update column tracking
+			if colKey := cellToColumn[cell]; colKey != "" {
+				if level > columnMaxLevel[colKey] {
+					columnMaxLevel[colKey] = level
+				}
+				columnUnresolvedCount[colKey]-- // Decrement unresolved count for this column
+			}
+		}
+
+		g.levels = append(g.levels, currentLevel)
+		processedCount += len(currentLevel)
+
+		if level%20 == 0 || len(currentLevel) > 100000 {
+			log.Printf("    📊 [Level Assignment] Level %d: %d nodes (total: %d/%d)",
+				level, len(currentLevel), processedCount, len(g.nodes))
+		}
+
+		// Find next level candidates
+		nextLevel := make([]string, 0)
+		nextLevelSet := make(map[string]bool)
+
+		// Process direct cell dependencies
+		for _, resolvedCell := range currentLevel {
+			for _, dependent := range reverseDeps[resolvedCell] {
+				if g.nodes[dependent].level != -1 {
+					continue
+				}
+				unresolvedCount[dependent]--
+				if unresolvedCount[dependent] == 0 && !nextLevelSet[dependent] {
+					nextLevel = append(nextLevel, dependent)
+					nextLevelSet[dependent] = true
+				}
+			}
+		}
+
+		// Check which columns became fully resolved (using counter instead of full scan)
+		columnsNowResolved := make([]string, 0)
+		for _, cell := range currentLevel {
+			if colKey := cellToColumn[cell]; colKey != "" {
+				if columnUnresolvedCount[colKey] == 0 {
+					// This column just became fully resolved
+					columnsNowResolved = append(columnsNowResolved, colKey)
+				}
+			}
+		}
+
+		// Deduplicate and notify dependents
+		seenCols := make(map[string]bool)
+		for _, colKey := range columnsNowResolved {
+			if seenCols[colKey] {
 				continue
 			}
+			seenCols[colKey] = true
 
-			maxDepLevel := -1
-			allDepsAssigned := true
-
-			for _, dep := range node.dependencies {
-				resolved, level := isDependencyResolved(dep)
-				if !resolved {
-					allDepsAssigned = false
-					break
+			for _, dependent := range reverseColumnDeps[colKey] {
+				if g.nodes[dependent].level != -1 {
+					continue
 				}
-				if level > maxDepLevel {
-					maxDepLevel = level
-				}
-			}
-
-			if allDepsAssigned {
-				targetLevel := maxDepLevel + 1
-				node.level = targetLevel
-
-				for len(g.levels) <= targetLevel {
-					g.levels = append(g.levels, make([]string, 0))
-				}
-
-				g.levels[targetLevel] = append(g.levels[targetLevel], cell)
-				anyAssigned = true
-
-				// Update column max level
-				parts := strings.Split(cell, "!")
-				if len(parts) == 2 {
-					col := ""
-					for _, ch := range parts[1] {
-						if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
-							col += string(ch)
-						} else {
-							break
+				if colDeps, exists := unresolvedColDeps[dependent]; exists {
+					if colDeps[colKey] {
+						delete(colDeps, colKey)
+						unresolvedCount[dependent]--
+						if unresolvedCount[dependent] == 0 && !nextLevelSet[dependent] {
+							nextLevel = append(nextLevel, dependent)
+							nextLevelSet[dependent] = true
 						}
 					}
-					colKey := parts[0] + "!" + col
-					if targetLevel > columnMaxLevel[colKey] {
-						columnMaxLevel[colKey] = targetLevel
-					}
 				}
 			}
 		}
 
-		if !anyAssigned {
-			break
-		}
+		currentLevel = nextLevel
+		level++
 	}
 
 	// Handle circular dependencies
@@ -425,10 +476,12 @@ func (g *dependencyGraph) assignLevels() {
 
 	if len(circularCells) > 0 {
 		g.levels = append(g.levels, circularCells)
-		log.Printf("  ⚠️  [Dependency Analysis] Found %d formulas with circular dependencies", len(circularCells))
+		log.Printf("  ⚠️  [Level Assignment] Found %d formulas with circular dependencies", len(circularCells))
 	}
 
-	// 优化：合并没有相互依赖的级别，减少顺序执行的开销
+	log.Printf("  ✅ [Level Assignment] Completed in %v (%d levels)", time.Since(startTime), len(g.levels))
+
+	// 优化：合并没有相互依赖的级别
 	g.mergeLevels()
 }
 
@@ -642,6 +695,27 @@ func extractDependencies(formula, currentSheet, currentCell string) []string {
 func extractDependenciesOptimized(formula, currentSheet, currentCell string, columnIndex map[string][]string, columnMetadata map[string]*columnMeta) []string {
 	deps := make(map[string]bool)
 
+	// Special handling for OFFSET/INDIRECT functions
+	// These functions create dynamic references that static analysis cannot fully resolve
+	// We need to detect the target sheet and add dependencies on all formula columns in that sheet
+	upperFormula := strings.ToUpper(formula)
+	if strings.Contains(upperFormula, "OFFSET(") || strings.Contains(upperFormula, "INDIRECT(") {
+		// Extract sheet names referenced in the formula
+		// Pattern: SheetName!$A$1 or 'Sheet Name'!$A$1
+		sheetRefs := extractSheetReferences(formula)
+		for _, sheetName := range sheetRefs {
+			// Add virtual dependency on ALL formula columns in the target sheet
+			// This ensures OFFSET/INDIRECT formulas wait for the target sheet to be fully calculated
+			if columnMetadata != nil {
+				for colKey, meta := range columnMetadata {
+					if meta.hasFormulas && strings.HasPrefix(colKey, sheetName+"!") {
+						deps["COLUMN:"+colKey] = true
+					}
+				}
+			}
+		}
+	}
+
 	ps := efp.ExcelParser()
 	tokens := ps.Parse(formula)
 	if tokens == nil {
@@ -767,6 +841,36 @@ func extractDependenciesOptimized(formula, currentSheet, currentCell string, col
 	result := make([]string, 0, len(deps))
 	for dep := range deps {
 		result = append(result, dep)
+	}
+	return result
+}
+
+// extractSheetReferences extracts sheet names referenced in a formula
+// Handles both 'Sheet Name'!ref and SheetName!ref formats
+func extractSheetReferences(formula string) []string {
+	sheets := make(map[string]bool)
+
+	// Pattern 1: 'Sheet Name'!
+	re1 := regexp.MustCompile(`'([^']+)'!`)
+	matches1 := re1.FindAllStringSubmatch(formula, -1)
+	for _, m := range matches1 {
+		if len(m) > 1 {
+			sheets[m[1]] = true
+		}
+	}
+
+	// Pattern 2: SheetName! (without quotes, alphanumeric and Chinese characters)
+	re2 := regexp.MustCompile(`([A-Za-z0-9_\x{4e00}-\x{9fff}]+)!`)
+	matches2 := re2.FindAllStringSubmatch(formula, -1)
+	for _, m := range matches2 {
+		if len(m) > 1 {
+			sheets[m[1]] = true
+		}
+	}
+
+	result := make([]string, 0, len(sheets))
+	for sheet := range sheets {
+		result = append(result, sheet)
 	}
 	return result
 }
@@ -1433,6 +1537,19 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 	log.Printf("  🔧 Using %d workers (CPU cores: %d)", numWorkers, runtime.NumCPU())
 
 	// ========================================
+	// 预处理：确保 setArrayFormulaCells 已执行
+	// 这避免了在并行计算中通过 getCellFormulaReadOnly 触发它导致的数据竞争
+	// ========================================
+	if !f.formulaChecked {
+		f.mu.Lock()
+		if !f.formulaChecked {
+			_ = f.setArrayFormulaCells()
+			f.formulaChecked = true
+		}
+		f.mu.Unlock()
+	}
+
+	// ========================================
 	// 关键优化：创建全局数据源缓存（懒加载模式）
 	// 所有层级的批量SUMIFS计算共享同一份数据源，避免重复读取
 	// ========================================
@@ -1519,6 +1636,12 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 		batchOptDuration := time.Since(batchOptStart)
 		log.Printf("  ✅ [Level %d] Batch optimization completed in %v", levelIdx, batchOptDuration)
 
+		// DEBUG: 检查 worksheetCache 中存储了多少个缓存项
+		if levelIdx == 0 {
+			cacheStats := worksheetCache.GetCacheStats()
+			log.Printf("  🔍 [DEBUG] worksheetCache stats after batch opt: %v", cacheStats)
+		}
+
 		// ========================================
 		// 步骤3：使用 DAG 调度器动态计算当前层
 		// ========================================
@@ -1537,6 +1660,11 @@ func (f *File) calculateByDAG(graph *dependencyGraph) {
 			}
 			dagDuration = time.Since(dagStart)
 		} else {
+			// DEBUG: 确认 scheduler 接收到的是同一个 worksheetCache
+			if levelIdx == 0 {
+				log.Printf("  🔍 [DEBUG] DAG scheduler worksheetCache ptr: %p", scheduler.worksheetCache)
+				log.Printf("  🔍 [DEBUG] Original worksheetCache ptr: %p", worksheetCache)
+			}
 			log.Printf("  🚀 [Level %d] DAG scheduler created, starting execution with %d workers...", levelIdx, numWorkers)
 			scheduler.Run()
 			dagDuration = time.Since(dagStart)
@@ -1702,6 +1830,13 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		}
 		formula := node.formula
 
+		// 先检查 AVERAGE(OFFSET) 模式 - 优先级最高
+		// 因为 AVERAGE(OFFSET(...MATCH...)) 包含 MATCH，会被 INDEX-MATCH 逻辑误捕获
+		if isAverageOffsetFormula(formula) {
+			// 这是 AVERAGE(OFFSET) 公式，后面会单独处理
+			continue
+		}
+
 		// 检查是否包含 INDEX-MATCH
 		if strings.Contains(formula, "INDEX(") && strings.Contains(formula, "MATCH(") {
 			indexMatchExpr := extractINDEXMATCHFromFormula(formula)
@@ -1747,8 +1882,20 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		log.Printf("  🎯 [Level %d DEBUG] indexMatchFormulas 包含 %d 个 补货汇总!I/J 公式", levelIdx, buhuoHuizongIndexMatch)
 	}
 
-	// 如果没有 SUMIFS 和 INDEX-MATCH，直接返回空缓存
-	if len(pureSUMIFS) == 0 && len(uniqueSUMIFSExprs) == 0 && len(indexMatchFormulas) == 0 {
+	// 检查是否有 AVERAGE(OFFSET) 公式
+	avgOffsetCount := 0
+	for cell := range levelCellsMap {
+		node, exists := graph.nodes[cell]
+		if !exists {
+			continue
+		}
+		if isAverageOffsetFormula(node.formula) {
+			avgOffsetCount++
+		}
+	}
+
+	// 如果没有 SUMIFS、INDEX-MATCH 和 AVERAGE(OFFSET)，直接返回空缓存
+	if len(pureSUMIFS) == 0 && len(uniqueSUMIFSExprs) == 0 && len(indexMatchFormulas) == 0 && avgOffsetCount == 0 {
 		return subExprCache
 	}
 
@@ -1763,6 +1910,7 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 		log.Printf("  ⚡ [Level %d Batch] Calculated %d pure SUMIFS", levelIdx, len(batchResults))
 
 		// 将批量结果存入 worksheetCache 和 calcCache
+		storedCount := 0
 		for cell, value := range batchResults {
 			// Store in worksheetCache for subsequent reads
 			// Phase 1: 需要将字符串转换为 formulaArg
@@ -1771,11 +1919,34 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 				cellType, _ := f.GetCellType(parts[0], parts[1])
 				arg := inferCellValueType(value, cellType)
 				worksheetCache.Set(parts[0], parts[1], arg)
+				storedCount++
 			}
 
 			// Store in calcCache for compatibility
 			cacheKey := cell + "!raw=true"
 			f.calcCache.Store(cacheKey, value)
+		}
+		log.Printf("  ⚡ [Level %d Batch] Stored %d results to worksheetCache", levelIdx, storedCount)
+
+		// 验证缓存是否正确存储（抽样检查）
+		sampleCount := 0
+		for cell := range batchResults {
+			if sampleCount >= 3 {
+				break
+			}
+			parts := strings.Split(cell, "!")
+			if len(parts) == 2 {
+				if cached, found := worksheetCache.Get(parts[0], parts[1]); found {
+					val := cached.Value()
+					if len(val) > 20 {
+						val = val[:20]
+					}
+					log.Printf("  ✅ [Cache Verify] %s found in cache, value=%s", cell, val)
+				} else {
+					log.Printf("  ❌ [Cache Verify] %s NOT found in cache!", cell)
+				}
+				sampleCount++
+			}
 		}
 	}
 
@@ -2005,11 +2176,75 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 			levelIdx, cacheStoreDuration, exprToCellDuration)
 	}
 
+	// 批量计算 AVERAGE(OFFSET) 公式（使用 worksheetCache）
+	// 收集 AVERAGE(OFFSET) 公式
+	avgOffsetFormulas := make(map[string]string)
+	for cell := range levelCellsMap {
+		node, exists := graph.nodes[cell]
+		if !exists {
+			continue
+		}
+		formula := node.formula
+		if isAverageOffsetFormula(formula) {
+			avgOffsetFormulas[cell] = formula
+		}
+	}
+
+	if len(avgOffsetFormulas) > 0 {
+		log.Printf("  🔍 [Level %d Batch] Found %d AVERAGE(OFFSET) formulas", levelIdx, len(avgOffsetFormulas))
+	} else {
+		// Debug: 检查是否有公式包含 AVERAGE 和 OFFSET
+		avgCount, offsetCount, matchCount := 0, 0, 0
+		for cell := range levelCellsMap {
+			node, exists := graph.nodes[cell]
+			if !exists {
+				continue
+			}
+			formula := node.formula
+			if strings.Contains(formula, "AVERAGE(") {
+				avgCount++
+			}
+			if strings.Contains(formula, "OFFSET(") {
+				offsetCount++
+			}
+			if strings.Contains(formula, "MATCH(") {
+				matchCount++
+			}
+		}
+		if avgCount > 0 || offsetCount > 0 || matchCount > 0 {
+			log.Printf("  🔍 [Level %d DEBUG] AVERAGE: %d, OFFSET: %d, MATCH: %d (but no AVERAGE(OFFSET) pattern detected)",
+				levelIdx, avgCount, offsetCount, matchCount)
+		}
+	}
+
+	if len(avgOffsetFormulas) >= 5 {
+		avgOffsetStart := time.Now()
+		batchResults := f.batchCalculateAverageOffsetWithCache(avgOffsetFormulas, worksheetCache)
+		avgOffsetDuration := time.Since(avgOffsetStart)
+		log.Printf("  ⚡ [Level %d Batch] Calculated %d AVERAGE(OFFSET) formulas in %v",
+			levelIdx, len(batchResults), avgOffsetDuration)
+
+		// 将 AVERAGE(OFFSET) 结果存入 worksheetCache 和 calcCache
+		for cell, value := range batchResults {
+			parts := strings.Split(cell, "!")
+			if len(parts) == 2 {
+				cellType, _ := f.GetCellType(parts[0], parts[1])
+				valueStr := fmt.Sprintf("%g", value)
+				arg := inferCellValueType(valueStr, cellType)
+				worksheetCache.Set(parts[0], parts[1], arg)
+				// 写入实际的 worksheet 数据结构
+				f.setFormulaValue(parts[0], parts[1], valueStr)
+			}
+			cacheKey := cell + "!raw=true"
+			f.calcCache.Store(cacheKey, fmt.Sprintf("%g", value))
+		}
+	}
+
 	batchDuration := time.Since(batchStart)
 	log.Printf("  ✅ [Level %d Batch] Completed in %v, cache size: %d", levelIdx, batchDuration, subExprCache.Len())
 
 	// 添加详细统计：哪些公式被批量优化了，哪些没有
-	optimizedCount := len(pureSUMIFS) + len(indexMatchFormulas)
+	optimizedCount := len(pureSUMIFS) + len(indexMatchFormulas) + len(avgOffsetFormulas)
 	totalCount := len(levelCells)
 	unoptimizedCount := totalCount - optimizedCount
 
@@ -2208,6 +2443,11 @@ func (f *File) preCalculateSimpleFormulas(levelCells []string, graph *dependency
 			isBatchType = true
 		}
 
+		// AVERAGE(OFFSET)
+		if isAverageOffsetFormula(formula) {
+			isBatchType = true
+		}
+
 		if !isBatchType {
 			simpleFormulas = append(simpleFormulas, cell)
 		}
@@ -2215,6 +2455,17 @@ func (f *File) preCalculateSimpleFormulas(levelCells []string, graph *dependency
 
 	if len(simpleFormulas) == 0 {
 		return 0
+	}
+
+	// 在并行计算前，确保 setArrayFormulaCells 已经执行
+	// 这避免了在并行计算中通过 getCellFormulaReadOnly 触发它导致的数据竞争
+	if !f.formulaChecked {
+		f.mu.Lock()
+		if !f.formulaChecked {
+			_ = f.setArrayFormulaCells()
+			f.formulaChecked = true
+		}
+		f.mu.Unlock()
 	}
 
 	// 并行计算简单公式
