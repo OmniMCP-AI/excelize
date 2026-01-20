@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	path := "/Users/zhoujielun/Downloads/跨境电商-补货计划结果表.xlsx"
+	path := "test/real-ecomm/跨境电商-补货计划结果表.xlsx"
 	f, err := excelize.OpenFile(path)
 	if err != nil {
 		log.Fatalf("open file failed: %v", err)

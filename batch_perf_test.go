@@ -8,7 +8,7 @@ import (
 
 // TestRebuildCalcChainPerformance 测试性能
 func TestRebuildCalcChainPerformance(t *testing.T) {
-	f, _ := OpenFile("/Users/zhoujielun/Downloads/跨境电商-补货计划demo-8.xlsx")
+	f, _ := OpenFile("test/real-ecomm/跨境电商-补货计划demo-8.xlsx")
 	defer f.Close()
 
 	start := time.Now()
