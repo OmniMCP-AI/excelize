@@ -1222,7 +1222,7 @@ func (f *File) evalInfixExpFunc(ctx *calcContext, sheet, cell string, token, nex
 	// call formula function to evaluate
 	funcName := opfStack.Peek().(efp.Token).TValue
 	funcName = strings.ToUpper(funcName)
-	funcName = strings.NewReplacer("_XLFN.", "", "_xlfn.", "", ".", "dot").Replace(funcName)
+	funcName = strings.NewReplacer("_XLFN.", "", "_xlfn.", "", ".", "dot", "_", "").Replace(funcName)
 	arg := callFuncByName(&formulaFuncs{f: f, sheet: sheet, cell: cell, ctx: ctx, worksheetCache: ctx.worksheetCache}, funcName,
 		[]reflect.Value{reflect.ValueOf(argsStack.Peek().(*list.List))})
 	if arg.Type == ArgError && opfStack.Len() == 1 {
