@@ -7,8 +7,33 @@
 package excelize
 
 import (
-	"bytes"
 	"container/list"
+)
+
+// AI function accepts two parameters and returns the current cell's cached value.
+// This is a placeholder implementation that preserves the existing cell value.
+//
+//	AI(param1, param2)
+func (fn *formulaFuncs) AI(argsList *list.List) formulaArg {
+	if argsList.Len() != 2 {
+		return newErrorFormulaArg(formulaErrorVALUE, "AI requires 2 arguments")
+	}
+
+	// Get the current cell's cached value
+	cachedValue, err := fn.f.GetCellValue(fn.sheet, fn.cell)
+	if err != nil {
+		return newStringFormulaArg("")
+	}
+	return newStringFormulaArg(cachedValue)
+}
+
+/*
+// ============================================================================
+// FastestAI API Implementation (commented out for now)
+// ============================================================================
+
+import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,3 +222,4 @@ func callFastestAIAPI(fn *formulaFuncs, toolName string, toolArgs map[string]int
 
 	return apiResp.CellValue, nil
 }
+*/
