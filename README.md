@@ -525,3 +525,4 @@ For questions about the core Excelize library, refer to the [official documentat
 ---
 
 **Performance Tip**: For workbooks with >10,000 formulas, always use `RecalculateAllWithDependency()` instead of individual `CalcCellValue()` calls. The dependency-aware approach can be 10-100x faster.
+
