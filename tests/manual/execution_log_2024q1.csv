@@ -1,3 +1,0 @@
-RunID,Tester,Date,CaseID,ExpectedResult,ActualResult,Status,Notes
-2024Q1-ManReg-01,张三,2024-01-07,TC-001,55,55,PASS,
-2024Q1-ManReg-01,张三,2024-01-07,TC-045,匹配值,匹配值,PASS,
