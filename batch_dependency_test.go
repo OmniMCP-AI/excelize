@@ -372,6 +372,225 @@ func TestRecalculateAffectedByCells(t *testing.T) {
 	})
 }
 
+// TestRecalculateAffectedByCellsWithExclusion tests the incremental recalculation with exclusion API
+func TestRecalculateAffectedByCellsWithExclusion(t *testing.T) {
+	t.Run("ExcludeSingleCell", func(t *testing.T) {
+		// 场景：A1 -> B1 -> C1
+		// 更新 A1，排除 B1，只有 C1 被重算
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+		f.SetCellFormula("Sheet1", "C1", "=B1+5")
+
+		f.RecalculateAllWithDependency()
+
+		// 验证初始值
+		b1Before, _ := f.GetCellValue("Sheet1", "B1")
+		c1Before, _ := f.GetCellValue("Sheet1", "C1")
+		if b1Before != "20" {
+			t.Fatalf("expected B1=20 before, got %s", b1Before)
+		}
+		if c1Before != "25" {
+			t.Fatalf("expected C1=25 before, got %s", c1Before)
+		}
+
+		// 更新 A1，同时手动设置 B1 的预计算值（不是正确的计算结果）
+		f.SetCellValue("Sheet1", "A1", 100)
+		f.SetCellValue("Sheet1", "B1", 999) // 预计算值，正确值应该是 200
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+			"Sheet1!B1": true,
+		}
+		excludeCells := map[string]bool{
+			"Sheet1!B1": true, // 排除 B1，不要重算
+		}
+
+		// 写入 B1 缓存
+		f.SetCellValue("Sheet1", "B1", 999)
+
+		err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, excludeCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion failed: %v", err)
+		}
+
+		// B1 应该保持预计算值 999，不被重算
+		b1After, _ := f.GetCellValue("Sheet1", "B1")
+		if b1After != "999" {
+			t.Errorf("expected B1=999 (excluded from recalc), got %s", b1After)
+		}
+
+		// C1 应该使用 B1 的值重算: 999 + 5 = 1004
+		c1After, _ := f.GetCellValue("Sheet1", "C1")
+		if c1After != "1004" {
+			t.Errorf("expected C1=1004, got %s", c1After)
+		}
+	})
+
+	t.Run("ExcludeMultipleCells", func(t *testing.T) {
+		// 场景：A1 -> B1 -> C1 -> D1
+		// 更新 A1，排除 B1 和 C1，只有 D1 被重算
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 1)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+		f.SetCellFormula("Sheet1", "C1", "=B1+10")
+		f.SetCellFormula("Sheet1", "D1", "=C1*3")
+
+		f.RecalculateAllWithDependency()
+
+		// 更新 A1，手动设置 B1 和 C1 的预计算值
+		f.SetCellValue("Sheet1", "A1", 100)
+		f.SetCellValue("Sheet1", "B1", 500)  // 预计算值
+		f.SetCellValue("Sheet1", "C1", 1000) // 预计算值
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+			"Sheet1!B1": true,
+			"Sheet1!C1": true,
+		}
+		excludeCells := map[string]bool{
+			"Sheet1!B1": true,
+			"Sheet1!C1": true,
+		}
+
+		err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, excludeCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion failed: %v", err)
+		}
+
+		// B1 和 C1 保持预计算值
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if b1 != "500" {
+			t.Errorf("expected B1=500 (excluded), got %s", b1)
+		}
+		if c1 != "1000" {
+			t.Errorf("expected C1=1000 (excluded), got %s", c1)
+		}
+
+		// D1 使用 C1 的预计算值重算: 1000 * 3 = 3000
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		if d1 != "3000" {
+			t.Errorf("expected D1=3000, got %s", d1)
+		}
+	})
+
+	t.Run("ExcludeCrossSheet", func(t *testing.T) {
+		// 场景：Data!A1 -> Data!B1 -> Sheet1!C1
+		// 更新 Data!A1，排除 Data!B1
+		f := NewFile()
+		f.NewSheet("Data")
+
+		f.SetCellValue("Data", "A1", 10)
+		f.SetCellFormula("Data", "B1", "=A1*5")
+		f.SetCellFormula("Sheet1", "C1", "=Data!B1+100")
+
+		f.RecalculateAllWithDependency()
+
+		// 更新 Data!A1，手动设置 Data!B1 的预计算值
+		f.SetCellValue("Data", "A1", 100)
+		f.SetCellValue("Data", "B1", 888) // 预计算值
+
+		updatedCells := map[string]bool{
+			"Data!A1": true,
+			"Data!B1": true,
+		}
+		excludeCells := map[string]bool{
+			"Data!B1": true,
+		}
+
+		err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, excludeCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion failed: %v", err)
+		}
+
+		// Data!B1 保持预计算值
+		b1, _ := f.GetCellValue("Data", "B1")
+		if b1 != "888" {
+			t.Errorf("expected Data!B1=888 (excluded), got %s", b1)
+		}
+
+		// Sheet1!C1 使用 Data!B1 的预计算值重算: 888 + 100 = 988
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "988" {
+			t.Errorf("expected Sheet1!C1=988, got %s", c1)
+		}
+	})
+
+	t.Run("EmptyExcludeList", func(t *testing.T) {
+		// 空排除列表，行为应该和 RecalculateAffectedByCells 一样
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+
+		f.RecalculateAllWithDependency()
+
+		f.SetCellValue("Sheet1", "A1", 50)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+
+		err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, nil)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion failed: %v", err)
+		}
+
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "100" {
+			t.Errorf("expected B1=100, got %s", b1)
+		}
+
+		// 空 map 也应该正常工作
+		f.SetCellValue("Sheet1", "A1", 25)
+		updatedCells["Sheet1!A1"] = true
+
+		err = f.RecalculateAffectedByCellsWithExclusion(updatedCells, map[string]bool{})
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion with empty map failed: %v", err)
+		}
+
+		b1, _ = f.GetCellValue("Sheet1", "B1")
+		if b1 != "50" {
+			t.Errorf("expected B1=50, got %s", b1)
+		}
+	})
+
+	t.Run("ExcludeNonAffectedCell", func(t *testing.T) {
+		// 排除列表中的单元格不在 affected 中，不应该影响结果
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+		f.SetCellValue("Sheet1", "D1", 999) // 不相关的单元格
+
+		f.RecalculateAllWithDependency()
+
+		f.SetCellValue("Sheet1", "A1", 50)
+
+		updatedCells := map[string]bool{
+			"Sheet1!A1": true,
+		}
+		excludeCells := map[string]bool{
+			"Sheet1!D1": true, // D1 不在 affected 中
+		}
+
+		err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, excludeCells)
+		if err != nil {
+			t.Fatalf("RecalculateAffectedByCellsWithExclusion failed: %v", err)
+		}
+
+		// B1 应该正常重算
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "100" {
+			t.Errorf("expected B1=100, got %s", b1)
+		}
+	})
+}
+
 // TestBatchUpdateValuesAndFormulasWithRecalc tests the new incremental update API
 func TestBatchUpdateValuesAndFormulasWithRecalc(t *testing.T) {
 	t.Run("BasicFunctionality", func(t *testing.T) {
@@ -689,6 +908,170 @@ func TestBatchUpdateValuesAndFormulasWithRecalc(t *testing.T) {
 		c1, _ := f.GetCellValue("Sheet1", "C1")
 		if c1 != "200" {
 			t.Errorf("expected C1=200, got '%s'", c1)
+		}
+	})
+
+	t.Run("PreCalculatedValueNotOverwritten", func(t *testing.T) {
+		// 测试预计算值不被增量重算覆盖的场景
+		// 场景：同时在 valueUpdates 和 formulaUpdates 中传入同一个单元格
+		// valueUpdates 中的值作为预计算值，不应该被重算覆盖
+		f := NewFile()
+
+		// 初始设置
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "C1", "=B1+5") // C1 依赖 B1
+
+		// 同时传入 B1 的值（预计算值）和公式
+		// 预计算值故意设为 9999（不是正确的 200），用于验证不被重算覆盖
+		values := []CellUpdate{
+			{Sheet: "Sheet1", Cell: "A1", Value: 100},  // A1 改为 100
+			{Sheet: "Sheet1", Cell: "B1", Value: 9999}, // B1 的预计算值
+		}
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2"}, // B1 公式，正确值应该是 200
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// B1 应该保持预计算值 9999，不被重算为 200
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "9999" {
+			t.Errorf("expected B1=9999 (pre-calculated value), got '%s' - value was overwritten by recalculation", b1)
+		}
+
+		// B1 的公式应该正确设置
+		b1Formula, _ := f.GetCellFormula("Sheet1", "B1")
+		if b1Formula != "=A1*2" {
+			t.Errorf("expected B1 formula '=A1*2', got '%s'", b1Formula)
+		}
+
+		// C1 应该使用 B1 的预计算值进行重算: 9999 + 5 = 10004
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "10004" {
+			t.Errorf("expected C1=10004 (using B1's pre-calculated value), got '%s'", c1)
+		}
+	})
+
+	t.Run("PreCalculatedValueChainDependency", func(t *testing.T) {
+		// 测试链式依赖中多个预计算值的场景
+		// A1 -> B1 -> C1 -> D1
+		// B1 和 C1 都有预计算值
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 1)
+		f.SetCellFormula("Sheet1", "D1", "=C1+1") // D1 依赖 C1
+
+		// B1 和 C1 都有预计算值
+		values := []CellUpdate{
+			{Sheet: "Sheet1", Cell: "A1", Value: 100},
+			{Sheet: "Sheet1", Cell: "B1", Value: 500},  // 预计算值（正确值应该是 200）
+			{Sheet: "Sheet1", Cell: "C1", Value: 1000}, // 预计算值（正确值应该是 505）
+		}
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2"}, // 正确值 200
+			{Sheet: "Sheet1", Cell: "C1", Formula: "=B1+5"}, // 正确值 505
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// B1 保持预计算值 500
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "500" {
+			t.Errorf("expected B1=500 (pre-calculated), got '%s'", b1)
+		}
+
+		// C1 保持预计算值 1000
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "1000" {
+			t.Errorf("expected C1=1000 (pre-calculated), got '%s'", c1)
+		}
+
+		// D1 使用 C1 的预计算值重算: 1000 + 1 = 1001
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		if d1 != "1001" {
+			t.Errorf("expected D1=1001 (using C1's pre-calculated value), got '%s'", d1)
+		}
+	})
+
+	t.Run("PreCalculatedValueCrossSheet", func(t *testing.T) {
+		// 测试跨 sheet 的预计算值场景
+		f := NewFile()
+		f.NewSheet("Data")
+
+		f.SetCellValue("Data", "A1", 10)
+		f.SetCellFormula("Sheet1", "C1", "=Data!B1*10") // Sheet1!C1 依赖 Data!B1
+
+		// Data!B1 有预计算值
+		values := []CellUpdate{
+			{Sheet: "Data", Cell: "A1", Value: 100},
+			{Sheet: "Data", Cell: "B1", Value: 888}, // 预计算值
+		}
+		formulas := []FormulaUpdate{
+			{Sheet: "Data", Cell: "B1", Formula: "=A1*2"}, // 正确值应该是 200
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// Data!B1 保持预计算值 888
+		b1, _ := f.GetCellValue("Data", "B1")
+		if b1 != "888" {
+			t.Errorf("expected Data!B1=888 (pre-calculated), got '%s'", b1)
+		}
+
+		// Sheet1!C1 使用 Data!B1 的预计算值重算: 888 * 10 = 8880
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "8880" {
+			t.Errorf("expected Sheet1!C1=8880 (using Data!B1's pre-calculated value), got '%s'", c1)
+		}
+	})
+
+	t.Run("MixedPreCalculatedAndNormalFormulas", func(t *testing.T) {
+		// 测试混合场景：部分公式有预计算值，部分没有
+		f := NewFile()
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "D1", "=B1+C1") // D1 依赖 B1 和 C1
+
+		// B1 有预计算值，C1 没有（需要计算）
+		values := []CellUpdate{
+			{Sheet: "Sheet1", Cell: "A1", Value: 100},
+			{Sheet: "Sheet1", Cell: "B1", Value: 777}, // B1 预计算值
+		}
+		formulas := []FormulaUpdate{
+			{Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2"}, // B1 有预计算值，不重算
+			{Sheet: "Sheet1", Cell: "C1", Formula: "=A1*3"}, // C1 没有预计算值，需要计算
+		}
+
+		err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
+		if err != nil {
+			t.Fatalf("BatchUpdateValuesAndFormulasWithRecalc failed: %v", err)
+		}
+
+		// B1 保持预计算值 777
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "777" {
+			t.Errorf("expected B1=777 (pre-calculated), got '%s'", b1)
+		}
+
+		// C1 没有预计算值，需要计算: 100 * 3 = 300
+		c1, _ := f.GetCellValue("Sheet1", "C1")
+		if c1 != "300" {
+			t.Errorf("expected C1=300 (calculated), got '%s'", c1)
+		}
+
+		// D1 使用 B1 的预计算值和 C1 的计算值: 777 + 300 = 1077
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		if d1 != "1077" {
+			t.Errorf("expected D1=1077, got '%s'", d1)
 		}
 	})
 }

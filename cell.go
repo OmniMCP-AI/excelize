@@ -872,6 +872,68 @@ func (f *File) SetCellFormula(sheet, cell, formula string, opts ...FormulaOpts) 
 	return err
 }
 
+// SetCellFormulaWithValue 设置单元格公式并同时设置其缓存值，不触发重新计算。
+//
+// 此函数用于批量更新场景，当调用方已经知道公式的计算结果时，
+// 可以直接设置公式和值，避免重新计算的开销。
+//
+// 与 SetCellFormula 的区别：
+//   - SetCellFormula: 设置公式后清除缓存值，需要后续计算
+//   - SetCellFormulaWithValue: 设置公式并保留/设置缓存值，无需重新计算
+//
+// 参数：
+//
+//	sheet: 工作表名称
+//	cell: 单元格坐标，如 "A1"
+//	formula: 公式内容，如 "=A1*2"
+//	value: 公式的预计算结果
+//
+// 示例：
+//
+//	// 已知公式 =A1*2 的结果是 200
+//	err := f.SetCellFormulaWithValue("Sheet1", "B1", "=A1*2", "200")
+func (f *File) SetCellFormulaWithValue(sheet, cell, formula, value string) error {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	c, _, _, err := ws.prepareCell(cell)
+	if err != nil {
+		return err
+	}
+
+	// 设置公式（不清除缓存）
+	if formula == "" {
+		ws.deleteSharedFormula(c)
+		c.F = nil
+		return f.deleteCalcChain(f.getSheetID(sheet), cell)
+	}
+
+	if c.F != nil {
+		c.F.Content = formula
+	} else {
+		c.F = &xlsxF{Content: formula}
+	}
+
+	// 设置单元格的缓存值（V 属性）
+	c.V = value
+	// 根据值推断类型
+	c.T, c.IS = "", nil
+	if _, err := strconv.ParseFloat(value, 64); err != nil && value != "" {
+		// 非数字，设置为字符串类型
+		c.T = "str"
+	}
+
+	// 写入内存缓存，确保 GetCellValue 和依赖计算能读到正确的值
+	cacheKey := sheet + "!" + cell
+	arg := inferFormulaResultType(value)
+	f.calcCache.Store(cacheKey, arg)
+	f.calcCache.Store(cacheKey+"!raw=false", value)
+	f.calcCache.Store(cacheKey+"!raw=true", value)
+
+	return nil
+}
+
 // setArrayFormula transform the array formula in an array formula range to the
 // normal formula and set cells in this range to the formula as the normal
 // formula.

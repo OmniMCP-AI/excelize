@@ -100,6 +100,15 @@ type FormulaUpdate struct {
 	Formula string // 公式内容，如 "=A1*2"（可以包含或不包含前导 '='）
 }
 
+// FormulaUpdateWithValue 表示一个带预计算值的公式更新操作
+// 使用此结构体可以避免设置公式后重新计算，直接使用提供的缓存值
+type FormulaUpdateWithValue struct {
+	Sheet   string // 工作表名称
+	Cell    string // 单元格坐标，如 "A1"
+	Formula string // 公式内容，如 "=A1*2"
+	Value   string // 预计算的值（公式的计算结果）
+}
+
 // BatchSetCellValue 批量设置单元格值，不触发重新计算
 //
 // 此函数用于批量更新多个单元格的值，相比循环调用 SetCellValue，
@@ -877,6 +886,35 @@ func (f *File) BatchSetFormulas(formulas []FormulaUpdate) error {
 	return nil
 }
 
+// BatchSetFormulasWithValue 批量设置公式及其预计算值，不触发重新计算
+//
+// 此函数用于批量更新场景，当调用方已经知道公式的计算结果时，
+// 可以直接设置公式和值，避免重新计算的开销。
+//
+// 与 BatchSetFormulas 的区别：
+//   - BatchSetFormulas: 设置公式后清除缓存值，需要后续计算
+//   - BatchSetFormulasWithValue: 设置公式并保留缓存值，无需重新计算
+//
+// 参数：
+//
+//	formulas: 带预计算值的公式更新列表
+//
+// 示例：
+//
+//	formulas := []excelize.FormulaUpdateWithValue{
+//	    {Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2", Value: "200"},
+//	    {Sheet: "Sheet1", Cell: "B2", Formula: "=A2*2", Value: "400"},
+//	}
+//	err := f.BatchSetFormulasWithValue(formulas)
+func (f *File) BatchSetFormulasWithValue(formulas []FormulaUpdateWithValue) error {
+	for _, formula := range formulas {
+		if err := f.SetCellFormulaWithValue(formula.Sheet, formula.Cell, formula.Formula, formula.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // BatchSetFormulasAndRecalculate 批量设置公式并重新计算
 //
 // 此函数批量设置多个单元格的公式，然后自动重新计算所有受影响的公式，
@@ -1593,6 +1631,21 @@ func (f *File) recalculateAffectedCells(calcChain *xlsxCalcChain, affectedFormul
 //	}
 //	err := f.BatchUpdateValuesAndFormulasWithRecalc(values, formulas)
 func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate, formulaUpdates []FormulaUpdate) error {
+	// 转换为 V2 格式：FormulaUpdate -> FormulaUpdateWithValue（Value 为空）
+	formulaUpdatesV2 := make([]FormulaUpdateWithValue, 0, len(formulaUpdates))
+	for _, formula := range formulaUpdates {
+		formulaUpdatesV2 = append(formulaUpdatesV2, FormulaUpdateWithValue{
+			Sheet:   formula.Sheet,
+			Cell:    formula.Cell,
+			Formula: formula.Formula,
+			Value:   "", // 空值，V2 会处理
+		})
+	}
+
+	// 调用 V2 版本
+	return f.BatchUpdateValuesAndFormulasWithRecalcV2(valueUpdates, formulaUpdatesV2)
+
+	/* 旧版本逻辑（已注释）
 	if len(valueUpdates) == 0 && len(formulaUpdates) == 0 {
 		return nil
 	}
@@ -1688,6 +1741,184 @@ func (f *File) BatchUpdateValuesAndFormulasWithRecalc(valueUpdates []CellUpdate,
 		arg := inferFormulaResultType(valueStr)
 		f.calcCache.Store(cacheKey, arg)
 		// 存储字符串类型到缓存
+		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
+		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
+	}
+
+	return err
+	*/
+}
+
+// BatchUpdateValuesAndFormulasWithRecalcV2 批量更新单元格值和公式（带预计算值），并只重新计算受影响的依赖公式
+//
+// 这是 BatchUpdateValuesAndFormulasWithRecalc 的优化版本，主要区别是公式更新可以携带预计算值，
+// 避免了设置公式后需要立即计算的开销。
+//
+// 适用场景：
+//   - 调用方已经知道公式的计算结果（例如从外部系统获取）
+//   - 批量导入带公式和值的数据
+//   - 需要最大化性能的场景
+//
+// 与 BatchUpdateValuesAndFormulasWithRecalc 的区别：
+//   - 旧版本：设置公式 → 计算公式 → 设置缓存 → 增量重算
+//   - 新版本：设置公式+值 → 增量重算（跳过公式计算步骤）
+//
+// 参数：
+//
+//	valueUpdates: 单元格值更新列表（可以为空）
+//	formulaUpdates: 带预计算值的公式更新列表（可以为空）
+//
+// 返回：
+//
+//	error: 错误信息
+//
+// 示例：
+//
+//	values := []excelize.CellUpdate{
+//	    {Sheet: "Sheet1", Cell: "A1", Value: 100},
+//	    {Sheet: "Sheet1", Cell: "A2", Value: 200},
+//	}
+//	formulas := []excelize.FormulaUpdateWithValue{
+//	    {Sheet: "Sheet1", Cell: "B1", Formula: "=A1*2", Value: "200"},
+//	    {Sheet: "Sheet1", Cell: "C1", Formula: "=B1+10", Value: "210"},
+//	}
+//	err := f.BatchUpdateValuesAndFormulasWithRecalcV2(values, formulas)
+func (f *File) BatchUpdateValuesAndFormulasWithRecalcV2(valueUpdates []CellUpdate, formulaUpdates []FormulaUpdateWithValue) error {
+	if len(valueUpdates) == 0 && len(formulaUpdates) == 0 {
+		return nil
+	}
+
+	// 1. 批量设置单元格值（不触发重算）
+	if len(valueUpdates) > 0 {
+		if err := f.BatchSetCellValue(valueUpdates); err != nil {
+			return err
+		}
+	}
+
+	// 2. 立即将更新的值写入缓存，确保后续依赖计算能读到新值
+	//    同时记录 valueUpdates 中的值，供步骤 3 使用
+	valueMap := make(map[string]string) // "Sheet!Cell" -> value string
+	for _, update := range valueUpdates {
+		cacheKey := update.Sheet + "!" + update.Cell
+		valueStr := fmt.Sprintf("%v", update.Value)
+		arg := inferFormulaResultType(valueStr)
+		f.calcCache.Store(cacheKey, arg)
+		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
+		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
+		valueMap[cacheKey] = valueStr
+	}
+
+	// 3. 分离有预计算值和没有预计算值的公式
+	formulasWithPreCalc := make([]FormulaUpdateWithValue, 0)
+	formulasNeedCalc := make([]FormulaUpdate, 0)
+	for _, formula := range formulaUpdates {
+		cellKey := formula.Sheet + "!" + formula.Cell
+		if v, ok := valueMap[cellKey]; ok {
+			// 有预计算值
+			formulasWithPreCalc = append(formulasWithPreCalc, FormulaUpdateWithValue{
+				Sheet:   formula.Sheet,
+				Cell:    formula.Cell,
+				Formula: formula.Formula,
+				Value:   v,
+			})
+		} else {
+			// 没有预计算值，需要计算
+			formulasNeedCalc = append(formulasNeedCalc, FormulaUpdate{
+				Sheet:   formula.Sheet,
+				Cell:    formula.Cell,
+				Formula: formula.Formula,
+			})
+		}
+	}
+
+	// 4. 设置有预计算值的公式（不触发重算）
+	if len(formulasWithPreCalc) > 0 {
+		if err := f.BatchSetFormulasWithValue(formulasWithPreCalc); err != nil {
+			return err
+		}
+	}
+
+	// 5. 设置没有预计算值的公式，然后批量计算
+	if len(formulasNeedCalc) > 0 {
+		// 按 sheet 分组
+		sheetFormulas := make(map[string][]FormulaUpdate) // sheet -> []FormulaUpdate
+		for _, formula := range formulasNeedCalc {
+			sheetFormulas[formula.Sheet] = append(sheetFormulas[formula.Sheet], formula)
+		}
+
+		// 批量计算每个 sheet 的公式，然后用 BatchSetFormulasWithValue 批量设置
+		allFormulasWithValue := make([]FormulaUpdateWithValue, 0, len(formulasNeedCalc))
+		for sheet, formulas := range sheetFormulas {
+			// 收集单元格列表
+			cells := make([]string, len(formulas))
+			for i, f := range formulas {
+				cells[i] = f.Cell
+			}
+			// 清除旧缓存
+			for _, cell := range cells {
+				cellKey := sheet + "!" + cell
+				f.calcCache.Delete(cellKey)
+				f.calcCache.Delete(cellKey + "!raw=false")
+				f.calcCache.Delete(cellKey + "!raw=true")
+			}
+			// 先设置公式（以便计算）
+			if err := f.BatchSetFormulas(formulas); err != nil {
+				return err
+			}
+			// 批量计算
+			results, _ := f.CalcCellValues(sheet, cells)
+			// 收集计算结果
+			for _, formula := range formulas {
+				value := results[formula.Cell]
+				allFormulasWithValue = append(allFormulasWithValue, FormulaUpdateWithValue{
+					Sheet:   formula.Sheet,
+					Cell:    formula.Cell,
+					Formula: formula.Formula,
+					Value:   value,
+				})
+			}
+		}
+
+		// 批量设置公式和值
+		if len(allFormulasWithValue) > 0 {
+			if err := f.BatchSetFormulasWithValue(allFormulasWithValue); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 6. 收集被更新的单元格（精确到单元格级别）
+	updatedCells := make(map[string]bool)
+	valueCells := make(map[string]bool) // 记录 valueUpdates 中的单元格
+	for _, update := range valueUpdates {
+		cellKey := update.Sheet + "!" + update.Cell
+		updatedCells[cellKey] = true
+		valueCells[cellKey] = true
+	}
+	for _, formula := range formulaUpdates {
+		updatedCells[formula.Sheet+"!"+formula.Cell] = true
+	}
+
+	// 7. 收集带预计算值的公式单元格（这些单元格不需要重算）
+	//    判断条件：单元格同时在 valueUpdates 和 formulaUpdates 中
+	excludeCells := make(map[string]bool)
+	for _, formula := range formulaUpdates {
+		cellKey := formula.Sheet + "!" + formula.Cell
+		if valueCells[cellKey] {
+			// 该公式单元格有预计算值，排除重算
+			excludeCells[cellKey] = true
+		}
+	}
+
+	// 8. 增量重算：只计算依赖于更新单元格的公式，但排除已有预计算值的公式单元格
+	err := f.RecalculateAffectedByCellsWithExclusion(updatedCells, excludeCells)
+
+	// 9. 恢复更新的值到缓存（增量重算可能清除了依赖于这些值的公式的缓存，但不会清除值本身）
+	for _, update := range valueUpdates {
+		cacheKey := update.Sheet + "!" + update.Cell
+		valueStr := fmt.Sprintf("%v", update.Value)
+		arg := inferFormulaResultType(valueStr)
+		f.calcCache.Store(cacheKey, arg)
 		f.calcCache.Store(cacheKey+"!raw=false", valueStr)
 		f.calcCache.Store(cacheKey+"!raw=true", valueStr)
 	}

@@ -2629,6 +2629,19 @@ func (f *File) filterDependencyGraph(graph *dependencyGraph, affectedCells map[s
 //
 //	updatedCells: 被更新的单元格，格式 "Sheet!Cell" -> true
 func (f *File) RecalculateAffectedByCells(updatedCells map[string]bool) error {
+	return f.RecalculateAffectedByCellsWithExclusion(updatedCells, nil)
+}
+
+// RecalculateAffectedByCellsWithExclusion 增量重算依赖于更新单元格的公式，但排除指定的单元格
+//
+// 参数：
+//   - updatedCells: 被更新的单元格集合 ("Sheet!Cell" -> true)
+//   - excludeCells: 需要排除的单元格集合（这些单元格不会被重算，即使它们依赖于 updatedCells）
+//
+// 使用场景：
+//   - 当调用方已经为某些公式单元格提供了预计算值时，这些单元格不需要重新计算
+//   - 避免预计算值被增量重算覆盖
+func (f *File) RecalculateAffectedByCellsWithExclusion(updatedCells map[string]bool, excludeCells map[string]bool) error {
 	if len(updatedCells) == 0 {
 		return nil
 	}
@@ -2836,6 +2849,22 @@ func (f *File) RecalculateAffectedByCells(updatedCells map[string]bool) error {
 	bfsDuration := time.Since(bfsStart)
 	log.Printf("  📊 [BFS] Found %d affected formulas (%.1f%%) in %v (%d iterations)",
 		len(affected), float64(len(affected))/float64(totalFormulas)*100, bfsDuration, iterations)
+
+	// ========================================
+	// 排除指定的单元格（这些单元格已有预计算值，不需要重算）
+	// ========================================
+	if len(excludeCells) > 0 {
+		excludedCount := 0
+		for cell := range excludeCells {
+			if affected[cell] {
+				delete(affected, cell)
+				excludedCount++
+			}
+		}
+		if excludedCount > 0 {
+			log.Printf("  🚫 [Exclusion] Excluded %d cells with pre-calculated values", excludedCount)
+		}
+	}
 
 	if len(affected) == 0 {
 		log.Printf("  ✅ No affected formulas, skipping recalculation")
