@@ -526,3 +526,7 @@ For questions about the core Excelize library, refer to the [official documentat
 
 **Performance Tip**: For workbooks with >10,000 formulas, always use `RecalculateAllWithDependency()` instead of individual `CalcCellValue()` calls. The dependency-aware approach can be 10-100x faster.
 
+# test for real case perf
+```bash
+go run test/examples/recalc_perf.go test/real-ecomm/step3-template-10k-formulas.xlsx  > perf-10k-v2.log  > perf-10k-v2.log 2>&1
+```
