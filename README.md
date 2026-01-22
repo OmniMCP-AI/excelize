@@ -528,5 +528,5 @@ For questions about the core Excelize library, refer to the [official documentat
 
 # test for real case perf
 ```bash
-go run test/examples/recalc_perf.go test/real-ecomm/step3-template-10k-formulas.xlsx  > perf-10k-v2.log  > perf-10k-v2.log 2>&1
+go run test/examples/recalc_perf.go test/real-ecomm/step3-template-10k-formulas.xlsx  > perf-10k.log 2>&1
 ```
