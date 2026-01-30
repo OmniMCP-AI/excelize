@@ -599,6 +599,7 @@ type formulaFuncs struct {
 //	HEX2OCT
 //	HLOOKUP
 //	HOUR
+//	HSTACK
 //	HYPERLINK
 //	HYPGEOM.DIST
 //	HYPGEOMDIST
@@ -852,6 +853,7 @@ type formulaFuncs struct {
 //	VARPA
 //	VDB
 //	VLOOKUP
+//	VSTACK
 //	WEEKDAY
 //	WEEKNUM
 //	WEIBULL
@@ -17392,6 +17394,192 @@ func (fn *formulaFuncs) MATCH(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorNA, lookupArrayErr)
 	}
 	return fn.calcMatch(matchType, formulaCriteriaParser(argsList.Front().Value.(formulaArg)), lookupArray)
+}
+
+// HSTACK function appends arrays horizontally and in sequence to return a
+// larger array. The syntax of the function is:
+//
+//	HSTACK(array1,[array2],...)
+//
+// HSTACK returns the array formed by appending each of the array arguments
+// in a column-wise fashion. The resulting array will have:
+//   - Rows: The maximum of the row count from each of the array arguments
+//   - Columns: The combined count of all the columns from each of the array arguments
+//
+// If an array has fewer rows than the maximum height, Excel returns #N/A in
+// the additional rows.
+func (fn *formulaFuncs) HSTACK(argsList *list.List) formulaArg {
+	if argsList.Len() < 1 {
+		return newErrorFormulaArg(formulaErrorVALUE, "HSTACK requires at least 1 argument")
+	}
+
+	// Convert all arguments to 2D matrices and check for errors
+	var matrices [][][]formulaArg
+	totalCols := 0
+	maxRows := 0
+
+	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
+		fa := arg.Value.(formulaArg)
+
+		// Propagate errors immediately
+		if fa.Type == ArgError {
+			return fa
+		}
+
+		// Convert argument to matrix
+		var matrix [][]formulaArg
+		if fa.Type == ArgMatrix {
+			matrix = fa.Matrix
+		} else {
+			// Single value - convert to 1x1 matrix
+			matrix = [][]formulaArg{{fa}}
+		}
+
+		// Check for errors within the matrix
+		for _, row := range matrix {
+			for _, cell := range row {
+				if cell.Type == ArgError {
+					return cell
+				}
+			}
+		}
+
+		rows := len(matrix)
+		cols := 0
+		if rows > 0 {
+			cols = len(matrix[0])
+		}
+
+		if rows > maxRows {
+			maxRows = rows
+		}
+		totalCols += cols
+		matrices = append(matrices, matrix)
+	}
+
+	// Handle edge case: all empty arrays
+	if maxRows == 0 || totalCols == 0 {
+		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	}
+
+	// Create result matrix filled with #N/A
+	result := make([][]formulaArg, maxRows)
+	for i := range result {
+		result[i] = make([]formulaArg, totalCols)
+		for j := range result[i] {
+			result[i][j] = newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+		}
+	}
+
+	// Place each array horizontally
+	colOffset := 0
+	for _, matrix := range matrices {
+		rows := len(matrix)
+		cols := 0
+		if rows > 0 {
+			cols = len(matrix[0])
+		}
+
+		for r := 0; r < rows; r++ {
+			for c := 0; c < cols && c < len(matrix[r]); c++ {
+				result[r][colOffset+c] = matrix[r][c]
+			}
+		}
+		colOffset += cols
+	}
+
+	return newMatrixFormulaArg(result)
+}
+
+// VSTACK function appends arrays vertically and in sequence to return a
+// larger array. The syntax of the function is:
+//
+//	VSTACK(array1,[array2],...)
+//
+// VSTACK returns the array formed by appending each of the array arguments
+// in a row-wise fashion. The resulting array will have:
+//   - Rows: The combined count of all the rows from each of the array arguments
+//   - Columns: The maximum of the column count from each of the array arguments
+//
+// If an array has fewer columns than the maximum width, Excel returns #N/A
+// in the additional columns.
+func (fn *formulaFuncs) VSTACK(argsList *list.List) formulaArg {
+	if argsList.Len() < 1 {
+		return newErrorFormulaArg(formulaErrorVALUE, "VSTACK requires at least 1 argument")
+	}
+
+	// Convert all arguments to 2D matrices and check for errors
+	var matrices [][][]formulaArg
+	totalRows := 0
+	maxCols := 0
+
+	for arg := argsList.Front(); arg != nil; arg = arg.Next() {
+		fa := arg.Value.(formulaArg)
+
+		// Propagate errors immediately
+		if fa.Type == ArgError {
+			return fa
+		}
+
+		// Convert argument to matrix
+		var matrix [][]formulaArg
+		if fa.Type == ArgMatrix {
+			matrix = fa.Matrix
+		} else {
+			// Single value - convert to 1x1 matrix
+			matrix = [][]formulaArg{{fa}}
+		}
+
+		// Check for errors within the matrix
+		for _, row := range matrix {
+			for _, cell := range row {
+				if cell.Type == ArgError {
+					return cell
+				}
+			}
+		}
+
+		rows := len(matrix)
+		cols := 0
+		if rows > 0 {
+			cols = len(matrix[0])
+		}
+
+		if cols > maxCols {
+			maxCols = cols
+		}
+		totalRows += rows
+		matrices = append(matrices, matrix)
+	}
+
+	// Handle edge case: all empty arrays
+	if totalRows == 0 || maxCols == 0 {
+		return newErrorFormulaArg(formulaErrorVALUE, formulaErrorVALUE)
+	}
+
+	// Create result matrix filled with #N/A
+	result := make([][]formulaArg, totalRows)
+	for i := range result {
+		result[i] = make([]formulaArg, maxCols)
+		for j := range result[i] {
+			result[i][j] = newErrorFormulaArg(formulaErrorNA, formulaErrorNA)
+		}
+	}
+
+	// Place each array vertically
+	rowOffset := 0
+	for _, matrix := range matrices {
+		rows := len(matrix)
+		for r := 0; r < rows; r++ {
+			cols := len(matrix[r])
+			for c := 0; c < cols && c < maxCols; c++ {
+				result[rowOffset+r][c] = matrix[r][c]
+			}
+		}
+		rowOffset += rows
+	}
+
+	return newMatrixFormulaArg(result)
 }
 
 // TRANSPOSE function 'transposes' an array of cells (i.e. the function copies
