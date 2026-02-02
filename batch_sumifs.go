@@ -12,10 +12,12 @@ import (
 // getCellValueOrCalcCache retrieves cell value from the unified worksheetCache
 // This ensures all reads get the latest values (both original and calculated)
 func (f *File) getCellValueOrCalcCache(sheet, cell string, worksheetCache *WorksheetCache) string {
-	// Read from unified worksheetCache
+	// Read from unified worksheetCache if available
 	// Phase 1: worksheetCache 现在返回 formulaArg，需要调用 Value() 转换为字符串
-	if argValue, ok := worksheetCache.Get(sheet, cell); ok {
-		return argValue.Value()
+	if worksheetCache != nil {
+		if argValue, ok := worksheetCache.Get(sheet, cell); ok {
+			return argValue.Value()
+		}
 	}
 
 	// If not in cache, read from worksheet (fallback for cells not pre-loaded)

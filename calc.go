@@ -884,6 +884,22 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 	if cachedResult, found := f.calcCache.Load(cacheKey); found {
 		return cachedResult.(string), nil
 	}
+
+	// Check if this is a multi-condition INDEX-MATCH formula that needs special handling
+	formula, _ := f.GetCellFormula(sheet, cell)
+	if isMultiCondIndexMatchFormula(formula) {
+		// Use the optimized batch calculation for this single formula
+		formulas := map[string]string{sheet + "!" + cell: formula}
+		results := f.batchCalculateIndexMatchMultiCondWithCache(formulas, nil)
+		if val, ok := results[sheet+"!"+cell]; ok {
+			// Cache the result
+			f.calcCache.Store(cacheKey, val)
+			simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
+			f.calcCache.Store(simpleRef, newStringFormulaArg(val))
+			return val, nil
+		}
+	}
+
 	if token, err = f.calcCellValue(&calcContext{
 		entry:             fmt.Sprintf("%s!%s", sheet, cell),
 		maxCalcIterations: options.MaxCalcIterations,

@@ -64,6 +64,7 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 	patterns1D := make(map[string]*indexMatch1DPattern)
 	patterns2D := make(map[string]*indexMatch2DPattern)
 	patternsAvg := make(map[string]*averageIndexMatchPattern)
+	patternsMultiCond := make(map[string]*indexMatchMultiCondPattern)
 
 	for fullCell, formula := range formulas {
 		parts := strings.Split(fullCell, "!")
@@ -73,6 +74,26 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 
 		sheet := parts[0]
 		cell := parts[1]
+
+		// Try multi-condition pattern first (most complex, e.g., MATCH(1, (cond1)*(cond2), 0))
+		if isMultiCondIndexMatchFormula(formula) {
+			patternMulti := f.extractIndexMatchMultiCondPattern(sheet, cell, formula)
+			if patternMulti != nil {
+				// Create pattern key based on result range and condition structure
+				key := patternMulti.resultRange
+				for _, cond := range patternMulti.conditions {
+					key += "|" + cond.condType + ":" + cond.sourceRange
+				}
+				if existing, exists := patternsMultiCond[key]; exists {
+					for k, v := range patternMulti.formulas {
+						existing.formulas[k] = v
+					}
+				} else {
+					patternsMultiCond[key] = patternMulti
+				}
+				continue
+			}
+		}
 
 		// Try AVERAGE+INDEX-MATCH pattern first (most specific)
 		patternAvg := f.extractAverageIndexMatchPattern(sheet, cell, formula)
@@ -113,6 +134,14 @@ func (f *File) batchCalculateINDEXMATCH(formulas map[string]string) map[string]s
 					patterns1D[key].formulas[k] = v
 				}
 			}
+		}
+	}
+
+	// Calculate multi-condition patterns first
+	for _, pattern := range patternsMultiCond {
+		patternResults := f.calculateIndexMatchMultiCondPatternWithCache(pattern, nil)
+		for cell, value := range patternResults {
+			results[cell] = value
 		}
 	}
 
@@ -1043,6 +1072,7 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 	patterns1D := make(map[string]*indexMatch1DPattern)
 	patterns2D := make(map[string]*indexMatch2DPattern)
 	patternsAvg := make(map[string]*averageIndexMatchPattern)
+	patternsMultiCond := make(map[string]*indexMatchMultiCondPattern)
 
 	for fullCell, formula := range formulas {
 		parts := strings.Split(fullCell, "!")
@@ -1052,6 +1082,26 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 
 		sheet := parts[0]
 		cell := parts[1]
+
+		// Try multi-condition pattern first (most complex, e.g., MATCH(1, (cond1)*(cond2), 0))
+		if isMultiCondIndexMatchFormula(formula) {
+			patternMulti := f.extractIndexMatchMultiCondPattern(sheet, cell, formula)
+			if patternMulti != nil {
+				// Create pattern key based on result range and condition structure
+				key := patternMulti.resultRange
+				for _, cond := range patternMulti.conditions {
+					key += "|" + cond.condType + ":" + cond.sourceRange
+				}
+				if existing, exists := patternsMultiCond[key]; exists {
+					for k, v := range patternMulti.formulas {
+						existing.formulas[k] = v
+					}
+				} else {
+					patternsMultiCond[key] = patternMulti
+				}
+				continue
+			}
+		}
 
 		// Try AVERAGE+INDEX-MATCH pattern first (most specific)
 		patternAvg := f.extractAverageIndexMatchPattern(sheet, cell, formula)
@@ -1092,6 +1142,14 @@ func (f *File) batchCalculateINDEXMATCHWithCache(formulas map[string]string, wor
 					patterns1D[key].formulas[k] = v
 				}
 			}
+		}
+	}
+
+	// Calculate multi-condition patterns first
+	for _, pattern := range patternsMultiCond {
+		patternResults := f.calculateIndexMatchMultiCondPatternWithCache(pattern, worksheetCache)
+		for cell, value := range patternResults {
+			results[cell] = value
 		}
 	}
 
