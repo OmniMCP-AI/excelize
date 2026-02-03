@@ -16694,16 +16694,14 @@ func (fn *formulaFuncs) IF(argsList *list.List) formulaArg {
 		return newErrorFormulaArg(formulaErrorVALUE, "IF accepts at most 3 arguments")
 	}
 
-	// 方案A: 检查所有参数，如果任何参数是错误，立即返回该错误
-	// 这确保 IF 函数不会"吞掉"错误，而是正确传播给外层的 IFERROR
-	for e := argsList.Front(); e != nil; e = e.Next() {
-		arg := e.Value.(formulaArg)
-		if arg.Type == ArgError {
-			return arg
-		}
+	// Excel 短路求值行为：只检查条件参数是否有错误
+	// 不检查 value_if_true 和 value_if_false，只有当需要返回某个分支时才传播该分支的错误
+	// 例如：IF(FALSE, 1/0, "ok") 应该返回 "ok"，忽略 1/0 的错误
+	token := argsList.Front().Value.(formulaArg)
+	if token.Type == ArgError {
+		return token
 	}
 
-	token := argsList.Front().Value.(formulaArg)
 	var (
 		cond   bool
 		err    error
@@ -16722,8 +16720,8 @@ func (fn *formulaFuncs) IF(argsList *list.List) formulaArg {
 		return newBoolFormulaArg(cond)
 	}
 	if cond {
+		// 条件为真，返回 value_if_true（第二个参数）
 		value := argsList.Front().Next().Value.(formulaArg)
-		// 如果值是错误类型，直接返回错误，不要转换成字符串
 		if value.Type == ArgError {
 			return value
 		}
@@ -16735,9 +16733,9 @@ func (fn *formulaFuncs) IF(argsList *list.List) formulaArg {
 		}
 		return result
 	}
+	// 条件为假，返回 value_if_false（第三个参数）
 	if argsList.Len() == 3 {
 		value := argsList.Back().Value.(formulaArg)
-		// 如果值是错误类型，直接返回错误，不要转换成字符串
 		if value.Type == ArgError {
 			return value
 		}
