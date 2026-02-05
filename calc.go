@@ -1768,7 +1768,17 @@ func calcGe(rOpd, lOpd formulaArg, opdStack *Stack) error {
 
 // calcSplice evaluate splice '&' operations.
 func calcSplice(rOpd, lOpd formulaArg, opdStack *Stack) error {
-	opdStack.Push(newStringFormulaArg(lOpd.Value() + rOpd.Value()))
+	// 数字转字符串时使用非科学计数法，与 Excel 行为一致
+	// 例如: 22483598035&"" 应该返回 "22483598035" 而不是 "2.2483598035e+10"
+	lVal := lOpd.Value()
+	rVal := rOpd.Value()
+	if lOpd.Type == ArgNumber && !lOpd.Boolean {
+		lVal = strconv.FormatFloat(lOpd.Number, 'f', -1, 64)
+	}
+	if rOpd.Type == ArgNumber && !rOpd.Boolean {
+		rVal = strconv.FormatFloat(rOpd.Number, 'f', -1, 64)
+	}
+	opdStack.Push(newStringFormulaArg(lVal + rVal))
 	return nil
 }
 
@@ -15512,7 +15522,12 @@ func (fn *formulaFuncs) concat(argsList *list.List) formulaArg {
 			if cell.Type == ArgError {
 				return cell
 			}
-			buf.WriteString(cell.Value())
+			// 数字转字符串时使用非科学计数法，与 Excel 行为一致
+			if cell.Type == ArgNumber && !cell.Boolean {
+				buf.WriteString(strconv.FormatFloat(cell.Number, 'f', -1, 64))
+			} else {
+				buf.WriteString(cell.Value())
+			}
 		}
 	}
 	return newStringFormulaArg(buf.String())
