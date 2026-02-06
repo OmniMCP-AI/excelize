@@ -12,6 +12,7 @@
 package excelize
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -428,9 +429,20 @@ func (f *File) moveCellDataForCol(sheet string, fromCol, toCol int) error {
 				ws.SheetData.Row[rowIdx].C[cellIdx].R, _ = CoordinatesToCellName(newCol, rowNum)
 			}
 		}
+		// 按列顺序重新排序单元格，确保 XML 序列化和流式读取时顺序正确
+		sortCellsByColumn(ws.SheetData.Row[rowIdx].C)
 	}
 
 	return nil
+}
+
+// sortCellsByColumn sorts cells in a row by their column number
+func sortCellsByColumn(cells []xlsxC) {
+	sort.Slice(cells, func(i, j int) bool {
+		colI, _, _ := CellNameToCoordinates(cells[i].R)
+		colJ, _, _ := CellNameToCoordinates(cells[j].R)
+		return colI < colJ
+	})
 }
 
 // updateAllFormulasForColMove updates all formulas in all worksheets
@@ -1006,6 +1018,8 @@ func (f *File) moveCellDataForCols(sheet string, fromCol, count, toCol int) erro
 				ws.SheetData.Row[rowIdx].C[cellIdx].R, _ = CoordinatesToCellName(newCol, rowNum)
 			}
 		}
+		// 按列顺序重新排序单元格，确保 XML 序列化和流式读取时顺序正确
+		sortCellsByColumn(ws.SheetData.Row[rowIdx].C)
 	}
 
 	return nil
