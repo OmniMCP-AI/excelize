@@ -323,11 +323,14 @@ func adjustFormulaColumnName(name, operand string, abs, keepRelative bool, dir a
 	if name == "" || (!abs && keepRelative) {
 		return "", operand + name, abs, nil
 	}
+	if dir != columns {
+		return "", operand + name, false, nil
+	}
 	col, err := ColumnNameToNumber(name)
 	if err != nil {
 		return "", operand, false, err
 	}
-	if dir == columns && col >= num {
+	if col >= num {
 		// Check if the referenced column is being deleted
 		// Don't produce #REF! when:
 		// - isDuplicate is true (DuplicateRowTo case)

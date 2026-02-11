@@ -16,13 +16,43 @@ func (f *File) getCellValueOrCalcCache(sheet, cell string, worksheetCache *Works
 	// Phase 1: worksheetCache 现在返回 formulaArg，需要调用 Value() 转换为字符串
 	if worksheetCache != nil {
 		if argValue, ok := worksheetCache.Get(sheet, cell); ok {
-			return argValue.Value()
+			val := argValue.Value()
+			// For ArgNumber, Value() uses %g which may produce scientific
+			// notation (e.g. "1.2677910539e+10") for large numbers. The
+			// batch result maps are keyed by GetRows raw text (e.g.
+			// "12677910539"). Use the full-precision decimal form so that
+			// map lookups match.
+			if argValue.Type == ArgNumber && !argValue.Boolean &&
+				strings.ContainsAny(val, "eE") {
+				val = strconv.FormatFloat(argValue.Number, 'f', -1, 64)
+			}
+			return val
 		}
 	}
 
 	// If not in cache, read from worksheet (fallback for cells not pre-loaded)
 	value, _ := f.GetCellValue(sheet, cell, Options{RawCellValue: true})
 	return value
+}
+
+// resolveCriteriaValue resolves a SUMIFS criteria argument to its string value.
+// The criteria may be a cell reference (e.g. "B2", "$A$1") or a literal value
+// (e.g. `"-"`, `"abc"`, `123`). Quoted string literals are unquoted and returned
+// directly; numeric literals are returned as-is. Cell references are looked up
+// via getCellValueOrCalcCache.
+func (f *File) resolveCriteriaValue(sheet, criteria string, worksheetCache *WorksheetCache) string {
+	// Quoted string literal: "-", "abc", etc.
+	if len(criteria) >= 2 && criteria[0] == '"' && criteria[len(criteria)-1] == '"' {
+		return criteria[1 : len(criteria)-1]
+	}
+	// Numeric literal (doesn't start with a letter, not a cell reference)
+	if len(criteria) > 0 && criteria[0] >= '0' && criteria[0] <= '9' {
+		if _, err := strconv.ParseFloat(criteria, 64); err == nil {
+			return criteria
+		}
+	}
+	// Cell reference: look up the value
+	return f.getCellValueOrCalcCache(sheet, criteria, worksheetCache)
 }
 
 // sumifs2DPattern represents a batch SUMIFS pattern where formulas form a 2D matrix
@@ -374,8 +404,8 @@ func (f *File) calculateSUMIFS1DPatternWithCache(pattern *sumifs1DPattern, works
 	for fullCell, info := range pattern.formulas {
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 
-		// Get criteria value from worksheetCache or cell
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell, worksheetCache)
+		// 解析 criteria 值：可能是单元格引用（如 B2）或字面量（如 "-"）
+		c1 := f.resolveCriteriaValue(info.sheet, criteria1Cell, worksheetCache)
 
 		if val, ok := resultMap[c1]; ok {
 			results[fullCell] = val
@@ -418,9 +448,9 @@ func (f *File) calculateSUMIFS2DPatternWithCache(pattern *sumifs2DPattern, works
 		criteria1Cell := strings.ReplaceAll(info.criteria1Cell, "$", "")
 		criteria2Cell := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-		// 优先从 worksheetCache 读取计算结果（处理公式单元格依赖）
-		c1 := f.getCellValueOrCalcCache(info.sheet, criteria1Cell, worksheetCache)
-		c2 := f.getCellValueOrCalcCache(info.sheet, criteria2Cell, worksheetCache)
+		// 解析 criteria 值：可能是单元格引用（如 B2）或字面量（如 "-"）
+		c1 := f.resolveCriteriaValue(info.sheet, criteria1Cell, worksheetCache)
+		c2 := f.resolveCriteriaValue(info.sheet, criteria2Cell, worksheetCache)
 
 		if resultMap[c1] != nil {
 			if val, ok := resultMap[c1][c2]; ok {

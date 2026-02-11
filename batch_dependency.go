@@ -1979,9 +1979,9 @@ func (f *File) batchOptimizeLevelWithCache(levelIdx int, levelCells []string, gr
 				criteria1CellClean := strings.ReplaceAll(info.criteria1Cell, "$", "")
 				criteria2CellClean := strings.ReplaceAll(info.criteria2Cell, "$", "")
 
-				// 从正确的 sheet 读取条件值
-				c1 := f.getCellValueOrCalcCache(info.sheet, criteria1CellClean, worksheetCache)
-				c2 := f.getCellValueOrCalcCache(info.sheet, criteria2CellClean, worksheetCache)
+				// 解析 criteria 值：可能是单元格引用（如 B2）或字面量（如 "-"）
+				c1 := f.resolveCriteriaValue(info.sheet, criteria1CellClean, worksheetCache)
+				c2 := f.resolveCriteriaValue(info.sheet, criteria2CellClean, worksheetCache)
 
 				var result float64 = 0
 				if resultMap[c1] != nil {
