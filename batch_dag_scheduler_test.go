@@ -314,6 +314,289 @@ func TestDAGSchedulerGoroutineLeak(t *testing.T) {
 	})
 }
 
+// TestOnCellCalculatedCallback tests the OnCellCalculated callback mechanism
+// in setFormulaValue.
+func TestOnCellCalculatedCallback(t *testing.T) {
+	t.Run("BasicCallback", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1*2")
+
+		type change struct{ Sheet, Cell, Old, New string }
+		var changes []change
+		var mu sync.Mutex
+
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			mu.Lock()
+			changes = append(changes, change{sheet, cell, oldValue, newValue})
+			mu.Unlock()
+		}
+
+		err := f.RecalculateAllWithDependency()
+		if err != nil {
+			t.Fatalf("RecalculateAllWithDependency failed: %v", err)
+		}
+
+		f.OnCellCalculated = nil
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if len(changes) == 0 {
+			t.Fatal("expected at least one callback invocation")
+		}
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Cell == "B1" && c.New == "20" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected callback for Sheet1!B1 with newValue=20, got %+v", changes)
+		}
+	})
+
+	t.Run("NoCallbackWhenValueUnchanged", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 5)
+		f.SetCellFormula("Sheet1", "B1", "=A1+5")
+
+		// First recalculation to set B1 = "10"
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("first recalc failed: %v", err)
+		}
+
+		// Second recalculation with callback — value should not change,
+		// so callback should NOT fire for B1.
+		var called bool
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			if sheet == "Sheet1" && cell == "B1" {
+				called = true
+			}
+		}
+
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("second recalc failed: %v", err)
+		}
+		f.OnCellCalculated = nil
+
+		if called {
+			t.Fatal("callback should not fire when value is unchanged")
+		}
+	})
+
+	t.Run("NilCallbackNoEffect", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1+1")
+
+		// OnCellCalculated is nil by default — should not panic
+		f.OnCellCalculated = nil
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("recalc with nil callback failed: %v", err)
+		}
+
+		val, err := f.GetCellValue("Sheet1", "B1")
+		if err != nil || val != "11" {
+			t.Fatalf("expected B1=11, got %s (err=%v)", val, err)
+		}
+	})
+
+	t.Run("ChainedFormulas", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 2)
+		f.SetCellFormula("Sheet1", "B1", "=A1*3") // 6
+		f.SetCellFormula("Sheet1", "C1", "=B1+4") // 10
+		f.SetCellFormula("Sheet1", "D1", "=C1*2") // 20
+
+		type change struct{ Sheet, Cell, Old, New string }
+		var changes []change
+		var mu sync.Mutex
+
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			mu.Lock()
+			changes = append(changes, change{sheet, cell, oldValue, newValue})
+			mu.Unlock()
+		}
+
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("recalc failed: %v", err)
+		}
+		f.OnCellCalculated = nil
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		// All three formula cells should have been reported
+		reported := make(map[string]string) // cell -> newValue
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" {
+				reported[c.Cell] = c.New
+			}
+		}
+
+		expect := map[string]string{"B1": "6", "C1": "10", "D1": "20"}
+		for cell, want := range expect {
+			if got, ok := reported[cell]; !ok {
+				t.Errorf("missing callback for %s", cell)
+			} else if got != want {
+				t.Errorf("cell %s: expected newValue=%s, got %s", cell, want, got)
+			}
+		}
+	})
+
+	t.Run("ConcurrentSafety", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		// Set up many independent formulas to exercise concurrent DAG workers
+		for i := 1; i <= 50; i++ {
+			cell := "A" + strconv.Itoa(i)
+			f.SetCellValue("Sheet1", cell, i)
+			fcell := "B" + strconv.Itoa(i)
+			f.SetCellFormula("Sheet1", fcell, "="+cell+"*10")
+		}
+
+		type change struct{ Sheet, Cell, Old, New string }
+		var changes []change
+		var mu sync.Mutex
+
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			mu.Lock()
+			changes = append(changes, change{sheet, cell, oldValue, newValue})
+			mu.Unlock()
+		}
+
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("recalc failed: %v", err)
+		}
+		f.OnCellCalculated = nil
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		reported := make(map[string]string)
+		for _, c := range changes {
+			reported[c.Cell] = c.New
+		}
+
+		for i := 1; i <= 50; i++ {
+			cell := "B" + strconv.Itoa(i)
+			want := strconv.Itoa(i * 10)
+			if got, ok := reported[cell]; !ok {
+				t.Errorf("missing callback for %s", cell)
+			} else if got != want {
+				t.Errorf("cell %s: expected %s, got %s", cell, want, got)
+			}
+		}
+	})
+
+	t.Run("CallbackOldValueCapture", func(t *testing.T) {
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "=A1+5")
+
+		// First recalc: B1 goes from "" to "15"
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("first recalc failed: %v", err)
+		}
+
+		// Change A1 to 20, so B1 should go from "15" to "25"
+		f.SetCellValue("Sheet1", "A1", 20)
+
+		type change struct{ Old, New string }
+		var b1Change *change
+		var mu sync.Mutex
+
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			if sheet == "Sheet1" && cell == "B1" {
+				mu.Lock()
+				b1Change = &change{oldValue, newValue}
+				mu.Unlock()
+			}
+		}
+
+		if err := f.RecalculateAllWithDependency(); err != nil {
+			t.Fatalf("second recalc failed: %v", err)
+		}
+		f.OnCellCalculated = nil
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if b1Change == nil {
+			t.Fatal("expected callback for B1 on second recalc")
+		}
+		if b1Change.Old != "15" {
+			t.Errorf("expected oldValue=15, got %s", b1Change.Old)
+		}
+		if b1Change.New != "25" {
+			t.Errorf("expected newValue=25, got %s", b1Change.New)
+		}
+	})
+
+	t.Run("DAGSchedulerDirectCallback", func(t *testing.T) {
+		// Test callback through the low-level DAG scheduler path
+		f := NewFile()
+		t.Cleanup(func() { _ = f.Close() })
+
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellValue("Sheet1", "A2", 5)
+		f.SetCellFormula("Sheet1", "B1", "=A1+A2")
+		f.SetCellFormula("Sheet1", "B2", "=B1*2")
+
+		type change struct{ Sheet, Cell, Old, New string }
+		var changes []change
+		var mu sync.Mutex
+
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			mu.Lock()
+			changes = append(changes, change{sheet, cell, oldValue, newValue})
+			mu.Unlock()
+		}
+
+		graph := f.buildDependencyGraph()
+		subExprCache := NewSubExpressionCache()
+		scheduler := f.NewDAGScheduler(graph, 2, subExprCache)
+
+		worksheetCache := NewWorksheetCache()
+		if err := worksheetCache.LoadSheet(f, "Sheet1"); err != nil {
+			t.Fatalf("load worksheet cache: %v", err)
+		}
+		scheduler.worksheetCache = worksheetCache
+
+		scheduler.Run()
+		f.OnCellCalculated = nil
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		reported := make(map[string]string)
+		for _, c := range changes {
+			reported[c.Cell] = c.New
+		}
+
+		if reported["B1"] != "15" {
+			t.Errorf("expected B1=15, got %s", reported["B1"])
+		}
+		if reported["B2"] != "30" {
+			t.Errorf("expected B2=30, got %s", reported["B2"])
+		}
+	})
+}
+
 // TestDAGSchedulerDeadlockDetection 测试调度器的死锁检测机制
 func TestDAGSchedulerDeadlockDetection(t *testing.T) {
 	t.Run("CircularDependencyInLevel", func(t *testing.T) {

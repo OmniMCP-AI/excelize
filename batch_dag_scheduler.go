@@ -421,16 +421,21 @@ func (f *File) setFormulaValue(sheet, cellName, value string) {
 	}
 
 	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
 	c, _, _, err := ws.prepareCell(cellName)
 	if err != nil {
+		ws.mu.Unlock()
 		log.Printf("  ⚠️  [setFormulaValue] prepareCell failed for %s!%s: %v", sheet, cellName, err)
 		return
 	}
 
+	oldValue := c.V
 	c.V = value
 	c.T = inferXMLCellType(value)
+	ws.mu.Unlock()
+
+	if f.OnCellCalculated != nil && oldValue != value {
+		f.OnCellCalculated(sheet, cellName, oldValue, value)
+	}
 }
 
 // inferXMLCellType 推断 XML 单元格类型（不是 formulaArg）

@@ -66,6 +66,12 @@ type File struct {
 	VMLDrawing       map[string]*vmlDrawing
 	VolatileDeps     *xlsxVolTypes
 	WorkBook         *xlsxWorkbook
+	// OnCellCalculated is an optional callback invoked when a formula
+	// calculation writes a new value to a cell. It is only triggered when
+	// the value actually changes. Callers must ensure concurrency safety
+	// inside the callback (e.g. use sync.Mutex) because the DAG scheduler
+	// invokes setFormulaValue from multiple goroutines.
+	OnCellCalculated func(sheet, cell, oldValue, newValue string)
 	ZipWriter        func(io.Writer) ZipWriter
 }
 
