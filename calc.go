@@ -9238,6 +9238,30 @@ func (fn *formulaFuncs) COUNTIF(argsList *list.List) formulaArg {
 	return newNumberFormulaArg(count)
 }
 
+// lookupRangeIndex searches rangeIndex for the given criteria. When the
+// criteria condition is a Number whose %g representation (e.g. "1.26779e+10")
+// differs from its full-precision decimal form (e.g. "12677910539"), both
+// representations are tried so that text cells storing numeric-looking strings
+// can still be matched.
+func lookupRangeIndex(rangeIndex map[string][]cellRef, criteria *formulaCriteria) ([]cellRef, bool) {
+	targetVal := criteria.Condition.Value()
+	if positions, exists := rangeIndex[targetVal]; exists {
+		return positions, true
+	}
+	// Fallback: if criteria was parsed as a Number, the %g format may use
+	// scientific notation while the range index stores the original text.
+	// Try the full-precision decimal representation.
+	if criteria.Condition.Type == ArgNumber {
+		decimal := strconv.FormatFloat(criteria.Condition.Number, 'f', -1, 64)
+		if decimal != targetVal {
+			if positions, exists := rangeIndex[decimal]; exists {
+				return positions, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // formulaIfsMatch function returns cells reference array which match criteria.
 // This is now a method of formulaFuncs to enable caching optimization.
 func (fn *formulaFuncs) formulaIfsMatch(args []formulaArg) (cellRefs []cellRef) {
@@ -9353,16 +9377,25 @@ func (fn *formulaFuncs) formulaIfsMatch(args []formulaArg) (cellRefs []cellRef) 
 
 			// Use index for equality criteria
 			if criteria.Type == criteriaEq && rangeIndex != nil {
-				targetVal := criteria.Condition.Value()
-				if positions, exists := rangeIndex[targetVal]; exists {
+				if positions, exists := lookupRangeIndex(rangeIndex, criteria); exists {
 					match = positions
 				}
 			} else if criteria.Type == criteriaEq {
 				// No index - direct comparison
 				targetVal := criteria.Condition.Value()
+				// Also prepare decimal form for Number criteria to handle
+				// %g scientific notation vs plain text mismatch
+				altVal := ""
+				if criteria.Condition.Type == ArgNumber {
+					altVal = strconv.FormatFloat(criteria.Condition.Number, 'f', -1, 64)
+					if altVal == targetVal {
+						altVal = ""
+					}
+				}
 				for rowIdx, row := range matrix {
 					for colIdx, col := range row {
-						if col.Value() == targetVal {
+						cv := col.Value()
+						if cv == targetVal || (altVal != "" && cv == altVal) {
 							match = append(match, cellRef{Col: colIdx, Row: rowIdx})
 						}
 					}
@@ -9393,10 +9426,9 @@ func (fn *formulaFuncs) formulaIfsMatch(args []formulaArg) (cellRefs []cellRef) 
 			if criteria.Type == criteriaEq && indexKey != "" {
 				if cached, ok := fn.f.rangeIndexCache.Load(indexKey); ok {
 					rangeIndex := cached.(map[string][]cellRef)
-					targetVal := criteria.Condition.Value()
 
 					// Find intersection of previous matches and current criteria matches
-					if positions, exists := rangeIndex[targetVal]; exists {
+					if positions, exists := lookupRangeIndex(rangeIndex, criteria); exists {
 						// Build a set of positions for fast lookup
 						posSet := make(map[cellRef]bool)
 						for _, pos := range positions {
