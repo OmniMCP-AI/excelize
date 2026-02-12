@@ -1558,6 +1558,170 @@ func TestConcurrentFormulaCalculationRace(t *testing.T) {
 	})
 }
 
+func TestRecalculateSheetWithDependency(t *testing.T) {
+	t.Run("BasicFormulas", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellValue("Sheet1", "A2", 20)
+		f.SetCellFormula("Sheet1", "B1", "A1*2")
+		f.SetCellFormula("Sheet1", "B2", "A2+B1")
+
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "20" {
+			t.Errorf("expected B1=20, got %s", b1)
+		}
+		b2, _ := f.GetCellValue("Sheet1", "B2")
+		if b2 != "40" {
+			t.Errorf("expected B2=40, got %s", b2)
+		}
+	})
+
+	t.Run("CrossSheetDataRead", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+
+		// Data sheet has source values (no formulas)
+		f.SetCellValue("Data", "A1", 100)
+		f.SetCellValue("Data", "A2", 200)
+
+		// Sheet1 references Data sheet
+		f.SetCellFormula("Sheet1", "B1", "Data!A1+Data!A2")
+		f.SetCellFormula("Sheet1", "B2", "B1*2")
+
+		// Only recalculate Sheet1 (Data sheet values are read as external data)
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "300" {
+			t.Errorf("expected B1=300, got %s", b1)
+		}
+		b2, _ := f.GetCellValue("Sheet1", "B2")
+		if b2 != "600" {
+			t.Errorf("expected B2=600, got %s", b2)
+		}
+	})
+
+	t.Run("OnlyTargetSheetRecalculated", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Sheet2")
+
+		// Both sheets have formulas
+		f.SetCellValue("Sheet1", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "A1*3")
+		f.SetCellValue("Sheet2", "A1", 5)
+		f.SetCellFormula("Sheet2", "B1", "A1*7")
+
+		// Only recalculate Sheet1
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		// Sheet1 formula should be recalculated
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "30" {
+			t.Errorf("expected Sheet1!B1=30, got %s", b1)
+		}
+
+		// Sheet2 formula should NOT be recalculated (still empty/original)
+		b1s2, _ := f.GetCellValue("Sheet2", "B1")
+		if b1s2 == "35" {
+			t.Errorf("Sheet2!B1 should not have been recalculated by RecalculateSheetWithDependency(Sheet1)")
+		}
+	})
+
+	t.Run("ChainDependency", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellValue("Sheet1", "A1", 1)
+		f.SetCellFormula("Sheet1", "B1", "A1+1")
+		f.SetCellFormula("Sheet1", "C1", "B1+1")
+		f.SetCellFormula("Sheet1", "D1", "C1+1")
+
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		d1, _ := f.GetCellValue("Sheet1", "D1")
+		if d1 != "4" {
+			t.Errorf("expected D1=4, got %s", d1)
+		}
+	})
+
+	t.Run("UpdateAndRecalculate", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+
+		f.SetCellValue("Data", "A1", 10)
+		f.SetCellFormula("Sheet1", "B1", "Data!A1*2")
+
+		// First recalculate
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("first RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "20" {
+			t.Errorf("expected B1=20, got %s", b1)
+		}
+
+		// Update source value and recalculate again
+		f.SetCellValue("Data", "A1", 50)
+		err = f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("second RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		b1, _ = f.GetCellValue("Sheet1", "B1")
+		if b1 != "100" {
+			t.Errorf("expected B1=100 after update, got %s", b1)
+		}
+	})
+
+	t.Run("NonExistentSheet", func(t *testing.T) {
+		f := NewFile()
+		err := f.RecalculateSheetWithDependency("NonExistent")
+		if err == nil {
+			t.Errorf("expected error for non-existent sheet")
+		}
+	})
+
+	t.Run("EmptySheet", func(t *testing.T) {
+		f := NewFile()
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Errorf("expected no error for empty sheet, got %v", err)
+		}
+	})
+
+	t.Run("SUMFormula", func(t *testing.T) {
+		f := NewFile()
+		for i := 1; i <= 10; i++ {
+			f.SetCellValue("Sheet1", "A"+itoa(i), i)
+		}
+		f.SetCellFormula("Sheet1", "B1", "SUM(A1:A10)")
+
+		err := f.RecalculateSheetWithDependency("Sheet1")
+		if err != nil {
+			t.Fatalf("RecalculateSheetWithDependency failed: %v", err)
+		}
+
+		b1, _ := f.GetCellValue("Sheet1", "B1")
+		if b1 != "55" {
+			t.Errorf("expected B1=55, got %s", b1)
+		}
+	})
+}
+
 // itoa converts int to string for cell references
 func itoa(i int) string {
 	if i == 0 {

@@ -1447,6 +1447,262 @@ func (f *File) RecalculateAllWithDependency() error {
 	return nil
 }
 
+// RecalculateSheetWithDependency recalculates only the formulas in the specified
+// worksheet, using DAG-based dependency resolution. Cross-sheet references are
+// treated as external data reads (their current values are used as-is without
+// recalculation). This is significantly faster than RecalculateAllWithDependency
+// when only one worksheet's formulas need updating.
+//
+// Use this when you've modified cell values in one or more sheets and only need
+// to recalculate formulas in a specific target sheet. For example, if a "Summary"
+// sheet contains SUMIFS formulas referencing a "Data" sheet, after updating the
+// "Data" sheet you can recalculate only the "Summary" sheet:
+//
+//	f.SetCellValue("Data", "A1", 100)
+//	err := f.RecalculateSheetWithDependency("Summary")
+func (f *File) RecalculateSheetWithDependency(sheet string) error {
+	// Acquire lock to prevent concurrent recalculation
+	f.recalcMu.Lock()
+	defer f.recalcMu.Unlock()
+
+	// Validate sheet exists
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	if ws == nil {
+		return newNotWorksheetError(sheet)
+	}
+
+	log.Printf("📊 [RecalculateSheet] Starting recalculation for sheet '%s' with DAG-based concurrent execution", sheet)
+
+	// Clear caches for the target sheet only (prefix-based cleanup)
+	calcCacheCount := 0
+	sheetPrefix := sheet + "!"
+	f.calcCache.Range(func(key, value interface{}) bool {
+		if keyStr, ok := key.(string); ok && strings.HasPrefix(keyStr, sheetPrefix) {
+			f.calcCache.Delete(key)
+			calcCacheCount++
+		}
+		return true
+	})
+
+	rangeCacheCount := f.rangeCache.Len()
+	if rangeCacheCount > 0 {
+		f.rangeCache.Clear()
+	}
+
+	if calcCacheCount > 0 || rangeCacheCount > 0 {
+		log.Printf("  🧹 [Cache Cleanup] Cleared %d calcCache entries (sheet-scoped) and %d rangeCache entries", calcCacheCount, rangeCacheCount)
+	}
+
+	// Build sheet-scoped dependency graph
+	graph := f.buildDependencyGraphForSheet(sheet)
+
+	if len(graph.nodes) == 0 {
+		log.Printf("✅ [RecalculateSheet] No formulas found in sheet '%s', nothing to recalculate", sheet)
+		return nil
+	}
+
+	// Calculate using the same DAG concurrency engine
+	f.calculateByDAG(graph)
+
+	log.Printf("✅ [RecalculateSheet] Completed for sheet '%s'", sheet)
+	return nil
+}
+
+// buildDependencyGraphForSheet builds a dependency graph scoped to a single worksheet.
+// It collects column metadata from ALL sheets (needed for dependency resolution of
+// cross-sheet references), but only includes formulas from the target sheet in the DAG.
+// Cross-sheet formula dependencies are excluded from the graph nodes - they are treated
+// as data cells whose values are already available.
+func (f *File) buildDependencyGraphForSheet(targetSheet string) *dependencyGraph {
+	startTime := time.Now()
+
+	graph := &dependencyGraph{
+		nodes:          make(map[string]*formulaNode),
+		columnMetadata: make(map[string]*columnMeta),
+	}
+
+	// Step 1: First pass - collect column metadata from ALL sheets, but formulas only from targetSheet
+	sheetList := f.GetSheetList()
+	formulasToProcess := make([]struct {
+		fullCell string
+		sheet    string
+		cellRef  string
+		formula  string
+	}, 0)
+
+	for _, sheet := range sheetList {
+		ws, err := f.workSheetReader(sheet)
+		if err != nil || ws == nil || ws.SheetData.Row == nil {
+			continue
+		}
+
+		isTargetSheet := sheet == targetSheet
+
+		for _, row := range ws.SheetData.Row {
+			for _, cell := range row.C {
+				col, rowNum, err := CellNameToCoordinates(cell.R)
+				if err != nil {
+					continue
+				}
+				colName, _ := ColumnNumberToName(col)
+				colKey := sheet + "!" + colName
+
+				// Initialize column metadata if not exists (for ALL sheets)
+				if graph.columnMetadata[colKey] == nil {
+					graph.columnMetadata[colKey] = &columnMeta{
+						hasFormulas: false,
+						formulaRows: nil,
+						maxRow:      0,
+					}
+				}
+				meta := graph.columnMetadata[colKey]
+
+				if rowNum > meta.maxRow {
+					meta.maxRow = rowNum
+				}
+
+				// Only collect formulas from the target sheet
+				if isTargetSheet && cell.F != nil {
+					formula := cell.F.Content
+					if formula == "" && cell.F.T == STCellFormulaTypeShared && cell.F.Si != nil {
+						formula, _ = getSharedFormula(ws, *cell.F.Si, cell.R)
+					}
+
+					if formula != "" {
+						fullCell := sheet + "!" + cell.R
+						formulasToProcess = append(formulasToProcess, struct {
+							fullCell string
+							sheet    string
+							cellRef  string
+							formula  string
+						}{fullCell, sheet, cell.R, formula})
+
+						graph.nodes[fullCell] = &formulaNode{
+							cell:         fullCell,
+							formula:      formula,
+							dependencies: nil,
+							level:        -1,
+						}
+
+						meta.hasFormulas = true
+						if meta.formulaRows == nil {
+							meta.formulaRows = make(map[int]bool)
+						}
+						meta.formulaRows[rowNum] = true
+					}
+				}
+			}
+		}
+	}
+
+	formulaCols, dataCols := 0, 0
+	for _, meta := range graph.columnMetadata {
+		if meta.hasFormulas {
+			formulaCols++
+		} else {
+			dataCols++
+		}
+	}
+
+	log.Printf("  📊 [Sheet Dependency] Collected %d formulas from '%s', %d columns metadata (%d with formulas, %d pure data)",
+		len(graph.nodes), targetSheet, len(graph.columnMetadata), formulaCols, dataCols)
+
+	if len(graph.nodes) == 0 {
+		return graph
+	}
+
+	// Step 2: Build column index (only for target sheet formulas)
+	columnIndex := make(map[string][]string)
+	for cellRef := range graph.nodes {
+		parts := strings.Split(cellRef, "!")
+		if len(parts) == 2 {
+			cell := parts[1]
+			cellCol := ""
+			for _, ch := range cell {
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					cellCol += string(ch)
+				} else {
+					break
+				}
+			}
+			if cellCol != "" {
+				key := parts[0] + "!" + cellCol
+				columnIndex[key] = append(columnIndex[key], cellRef)
+			}
+		}
+	}
+
+	log.Printf("  📊 [Sheet Dependency] Built column index: %d columns with formulas", len(columnIndex))
+
+	// Step 3: Extract dependencies (PARALLELIZED)
+	log.Printf("  📊 [Sheet Dependency] Extracting dependencies for %d formulas (parallel)...", len(formulasToProcess))
+	extractStart := time.Now()
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 16 {
+		numWorkers = 16
+	}
+
+	type depResult struct {
+		fullCell string
+		deps     []string
+	}
+
+	workChan := make(chan struct {
+		fullCell string
+		sheet    string
+		cellRef  string
+		formula  string
+	}, len(formulasToProcess))
+
+	resultChan := make(chan depResult, len(formulasToProcess))
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for info := range workChan {
+				deps := extractDependenciesOptimized(info.formula, info.sheet, info.cellRef, columnIndex, graph.columnMetadata)
+				resultChan <- depResult{fullCell: info.fullCell, deps: deps}
+			}
+		}()
+	}
+
+	go func() {
+		for _, info := range formulasToProcess {
+			workChan <- info
+		}
+		close(workChan)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	for result := range resultChan {
+		graph.nodes[result.fullCell].dependencies = result.deps
+	}
+
+	log.Printf("  📊 [Sheet Dependency] Extracted dependencies in %v (parallel with %d workers)", time.Since(extractStart), numWorkers)
+
+	// Step 4: Assign levels using topological sort
+	graph.assignLevels()
+
+	duration := time.Since(startTime)
+	log.Printf("  ✅ [Sheet Dependency] Completed in %v", duration)
+	log.Printf("  📈 [Sheet Dependency] %d levels for sheet '%s'", len(graph.levels), targetSheet)
+	for i, cells := range graph.levels {
+		log.Printf("      Level %d: %d formulas", i, len(cells))
+	}
+
+	return graph
+}
+
 // ClearFormulaCache clears all formula calculation caches
 // This is useful when you want to manually control cache lifecycle,
 // especially in long-running processes or when processing multiple files.
