@@ -284,8 +284,12 @@ func (f *File) adjustCellRef(cellRef string, dir adjustDirection, num, offset in
 func (f *File) adjustFormula(sheet, sheetN string, cell *xlsxC, dir adjustDirection, num, offset int, si bool) error {
 	var err error
 	if cell.f != "" {
+		oldFormula := cell.f
 		if cell.f, err = f.adjustFormulaRef(sheet, sheetN, cell.f, false, dir, num, offset, si); err != nil {
 			return err
+		}
+		if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
+			f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
 		}
 	}
 	if cell.F == nil {
@@ -300,8 +304,12 @@ func (f *File) adjustFormula(sheet, sheetN string, cell *xlsxC, dir adjustDirect
 		}
 	}
 	if cell.F.Content != "" {
+		oldFormula := cell.F.Content
 		if cell.F.Content, err = f.adjustFormulaRef(sheet, sheetN, cell.F.Content, false, dir, num, offset, si); err != nil {
 			return err
+		}
+		if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
+			f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
 		}
 	}
 	return nil

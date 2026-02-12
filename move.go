@@ -188,12 +188,20 @@ func (f *File) updateAllFormulasForRowMove(sheet string, fromRow, toRow int) err
 
 				// Update regular formula
 				if cell.f != "" {
+					oldFormula := cell.f
 					cell.f = updateFormulaForRowMove(sheet, sheetN, cell.f, fromRow, toRow)
+					if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
+					}
 				}
 
 				// Update cell formula
 				if cell.F != nil && cell.F.Content != "" {
+					oldFormula := cell.F.Content
 					cell.F.Content = updateFormulaForRowMove(sheet, sheetN, cell.F.Content, fromRow, toRow)
+					if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
+					}
 				}
 			}
 		}
@@ -462,12 +470,20 @@ func (f *File) updateAllFormulasForColMove(sheet string, fromCol, toCol int) err
 
 				// Update regular formula
 				if cell.f != "" {
+					oldFormula := cell.f
 					cell.f = updateFormulaForColMove(sheet, sheetN, cell.f, fromCol, toCol)
+					if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
+					}
 				}
 
 				// Update cell formula
 				if cell.F != nil && cell.F.Content != "" {
+					oldFormula := cell.F.Content
 					cell.F.Content = updateFormulaForColMove(sheet, sheetN, cell.F.Content, fromCol, toCol)
+					if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
+					}
 				}
 			}
 		}
@@ -760,12 +776,20 @@ func (f *File) updateAllFormulasForRowsMove(sheet string, fromRow, count, toRow 
 
 				// Update regular formula
 				if cell.f != "" {
+					oldFormula := cell.f
 					cell.f = updateFormulaForRowsMove(sheet, sheetN, cell.f, fromRow, count, toRow)
+					if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
+					}
 				}
 
 				// Update cell formula
 				if cell.F != nil && cell.F.Content != "" {
+					oldFormula := cell.F.Content
 					cell.F.Content = updateFormulaForRowsMove(sheet, sheetN, cell.F.Content, fromRow, count, toRow)
+					if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
+					}
 				}
 			}
 		}
@@ -1041,11 +1065,19 @@ func (f *File) updateAllFormulasForColsMove(sheet string, fromCol, count, toCol 
 				cell := &worksheet.SheetData.Row[rowIdx].C[cellIdx]
 
 				if cell.f != "" {
+					oldFormula := cell.f
 					cell.f = updateFormulaForColsMove(sheet, sheetN, cell.f, fromCol, count, toCol)
+					if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
+					}
 				}
 
 				if cell.F != nil && cell.F.Content != "" {
+					oldFormula := cell.F.Content
 					cell.F.Content = updateFormulaForColsMove(sheet, sheetN, cell.F.Content, fromCol, count, toCol)
+					if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
+						f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
+					}
 				}
 			}
 		}

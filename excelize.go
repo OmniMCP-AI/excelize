@@ -72,7 +72,13 @@ type File struct {
 	// inside the callback (e.g. use sync.Mutex) because the DAG scheduler
 	// invokes setFormulaValue from multiple goroutines.
 	OnCellCalculated func(sheet, cell, oldValue, newValue string)
-	ZipWriter        func(io.Writer) ZipWriter
+	// OnFormulaAdjusted is an optional callback invoked when a structural
+	// operation (insert/delete rows/columns) causes a cell's formula
+	// reference to change. sheet is the worksheet containing the cell,
+	// cell is the cell reference (e.g. "B5"), oldFormula and newFormula
+	// are the formula text before and after adjustment.
+	OnFormulaAdjusted func(sheet, cell, oldFormula, newFormula string)
+	ZipWriter         func(io.Writer) ZipWriter
 }
 
 // ZipWriter defines an interface for writing files to a ZIP archive. It

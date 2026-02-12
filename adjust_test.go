@@ -1337,3 +1337,196 @@ func TestAdjustDefinedNames(t *testing.T) {
 	f.Pkg.Store(defaultXMLPathWorkbook, MacintoshCyrillicCharset)
 	assert.EqualError(t, f.adjustDefinedNames("Sheet1", columns, 0, 0), "XML syntax error on line 1: invalid UTF-8")
 }
+
+func TestOnFormulaAdjustedCallback(t *testing.T) {
+	t.Run("InsertRows", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellFormula("Sheet1", "B5", "SUM(A1:A4)")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.InsertRows("Sheet1", 2, 1))
+
+		assert.True(t, len(changes) > 0, "expected at least one callback")
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Cell == "B6" && c.Old == "SUM(A1:A4)" && c.New == "SUM(A1:A5)" {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected B6 formula adjusted from SUM(A1:A4) to SUM(A1:A5)")
+	})
+
+	t.Run("InsertCols", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellFormula("Sheet1", "D1", "SUM(A1:C1)")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.InsertCols("Sheet1", "B", 1))
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Old == "SUM(A1:C1)" && c.New == "SUM(A1:D1)" {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected formula adjusted from SUM(A1:C1) to SUM(A1:D1)")
+	})
+
+	t.Run("NilCallback", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellFormula("Sheet1", "B5", "SUM(A1:A4)")
+		f.OnFormulaAdjusted = nil
+		assert.NoError(t, f.InsertRows("Sheet1", 2, 1))
+	})
+
+	t.Run("NoChangeNoCallback", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellFormula("Sheet1", "B1", "SUM(C1:D1)")
+
+		callCount := 0
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			if cell == "B1" {
+				callCount++
+			}
+		}
+
+		// 在第 5 行插入，不影响 B1 的公式 SUM(C1:D1)
+		assert.NoError(t, f.InsertRows("Sheet1", 5, 1))
+		assert.Equal(t, 0, callCount, "should not trigger callback when formula unchanged")
+	})
+
+	t.Run("DeleteRows", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellFormula("Sheet1", "B5", "SUM(A1:A4)")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.RemoveRow("Sheet1", 1))
+
+		assert.True(t, len(changes) > 0, "expected callback on row deletion")
+	})
+
+	t.Run("RenameSheet", func(t *testing.T) {
+		f := NewFile()
+		f.NewSheet("Data")
+		f.SetCellFormula("Sheet1", "A1", "Data!A1*2")
+		f.SetCellFormula("Sheet1", "A2", "SUM(Data!A1:A10)")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.SetSheetName("Data", "数据表"))
+
+		assert.True(t, len(changes) >= 2, "expected at least 2 callbacks for renamed sheet references")
+		foundA1 := false
+		foundA2 := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Cell == "A1" && c.Old == "Data!A1*2" && c.New == "数据表!A1*2" {
+				foundA1 = true
+			}
+			if c.Sheet == "Sheet1" && c.Cell == "A2" && c.Old == "SUM(Data!A1:A10)" && c.New == "SUM(数据表!A1:A10)" {
+				foundA2 = true
+			}
+		}
+		assert.True(t, foundA1, "expected A1 formula adjusted from Data!A1*2 to 数据表!A1*2")
+		assert.True(t, foundA2, "expected A2 formula adjusted from SUM(Data!A1:A10) to SUM(数据表!A1:A10)")
+	})
+
+	t.Run("MoveRow", func(t *testing.T) {
+		f := NewFile()
+		// A1 引用 A3，把第 3 行移到第 5 行后，A1 的公式应该从 A3 变成 A5
+		f.SetCellValue("Sheet1", "A3", 100)
+		f.SetCellFormula("Sheet1", "A1", "A3*2")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.MoveRow("Sheet1", 3, 5))
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Old != c.New {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected callback on MoveRow formula adjustment")
+	})
+
+	t.Run("MoveCol", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellValue("Sheet1", "C1", 100)
+		f.SetCellFormula("Sheet1", "A1", "C1*2")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.MoveCol("Sheet1", "C", "E"))
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Old != c.New {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected callback on MoveCol formula adjustment")
+	})
+
+	t.Run("MoveRows", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellValue("Sheet1", "A5", 100)
+		f.SetCellFormula("Sheet1", "A1", "A5+A6")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.MoveRows("Sheet1", 5, 2, 10))
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Old != c.New {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected callback on MoveRows formula adjustment")
+	})
+
+	t.Run("MoveCols", func(t *testing.T) {
+		f := NewFile()
+		f.SetCellValue("Sheet1", "E1", 100)
+		f.SetCellFormula("Sheet1", "A1", "E1+F1")
+
+		var changes []struct{ Sheet, Cell, Old, New string }
+		f.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+			changes = append(changes, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldFormula, newFormula})
+		}
+
+		assert.NoError(t, f.MoveCols("Sheet1", "E", 2, "H"))
+
+		found := false
+		for _, c := range changes {
+			if c.Sheet == "Sheet1" && c.Old != c.New {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected callback on MoveCols formula adjustment")
+	})
+}

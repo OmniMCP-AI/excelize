@@ -410,7 +410,7 @@ func (f *File) SetSheetName(source, target string) error {
 	defer f.mu.Unlock()
 	for sheetName := range f.sheetMap {
 		if ws, err := f.workSheetReader(sheetName); err == nil {
-			f.updateFormulasInWorksheet(ws, source, target)
+			f.updateFormulasInWorksheet(ws, sheetName, source, target)
 		}
 	}
 
@@ -418,7 +418,7 @@ func (f *File) SetSheetName(source, target string) error {
 }
 
 // updateFormulasInWorksheet updates all formulas in a worksheet that reference the renamed sheet
-func (f *File) updateFormulasInWorksheet(ws *xlsxWorksheet, oldName, newName string) {
+func (f *File) updateFormulasInWorksheet(ws *xlsxWorksheet, sheetName, oldName, newName string) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
@@ -431,7 +431,11 @@ func (f *File) updateFormulasInWorksheet(ws *xlsxWorksheet, oldName, newName str
 		for cellIdx := range ws.SheetData.Row[rowIdx].C {
 			cell := &ws.SheetData.Row[rowIdx].C[cellIdx]
 			if cell.F != nil && cell.F.Content != "" {
+				oldFormula := cell.F.Content
 				cell.F.Content = updateFormulaSheetName(cell.F.Content, oldNameEscaped, newNameEscaped)
+				if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" {
+					f.OnFormulaAdjusted(sheetName, cell.R, oldFormula, cell.F.Content)
+				}
 			}
 		}
 	}
