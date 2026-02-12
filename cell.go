@@ -12,6 +12,7 @@
 package excelize
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"math"
@@ -153,7 +154,20 @@ func (f *File) SetCellValue(sheet, cell string, value interface{}) error {
 	case nil:
 		err = f.SetCellDefault(sheet, cell, "")
 	default:
-		err = f.SetCellStr(sheet, cell, fmt.Sprint(value))
+		// For slice/array/map types (e.g. []interface{} from JSON unmarshal),
+		// use JSON encoding to preserve structure instead of fmt.Sprint which
+		// loses quoting (e.g. []interface{}{"aaaa"} → "[aaaa]" vs `["aaaa"]`).
+		rv := reflect.ValueOf(value)
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Array, reflect.Map:
+			if b, jsonErr := json.Marshal(value); jsonErr == nil {
+				err = f.SetCellStr(sheet, cell, string(b))
+			} else {
+				err = f.SetCellStr(sheet, cell, fmt.Sprint(value))
+			}
+		default:
+			err = f.SetCellStr(sheet, cell, fmt.Sprint(value))
+		}
 	}
 	return err
 }
