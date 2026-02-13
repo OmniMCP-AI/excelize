@@ -279,6 +279,13 @@ func (f *File) adjustCellRef(cellRef string, dir adjustDirection, num, offset in
 	return strings.Join(SQRef, " "), nil
 }
 
+// formulaNewlyContainsREF returns true if newFormula contains "#REF!"
+// and oldFormula did not, indicating a structural operation introduced
+// an invalid reference.
+func formulaNewlyContainsREF(oldFormula, newFormula string) bool {
+	return strings.Contains(newFormula, "#REF!") && !strings.Contains(oldFormula, "#REF!")
+}
+
 // adjustFormula provides a function to adjust formula reference and shared
 // formula reference.
 func (f *File) adjustFormula(sheet, sheetN string, cell *xlsxC, dir adjustDirection, num, offset int, si bool) error {
@@ -290,6 +297,14 @@ func (f *File) adjustFormula(sheet, sheetN string, cell *xlsxC, dir adjustDirect
 		}
 		if f.OnFormulaAdjusted != nil && cell.f != oldFormula && cell.R != "" {
 			f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.f)
+		}
+		if formulaNewlyContainsREF(oldFormula, cell.f) {
+			oldValue := cell.V
+			cell.V = formulaErrorREF
+			cell.T = "e"
+			if f.OnCellCalculated != nil && cell.R != "" && oldValue != cell.V {
+				f.OnCellCalculated(sheetN, cell.R, oldValue, cell.V)
+			}
 		}
 	}
 	if cell.F == nil {
@@ -310,6 +325,14 @@ func (f *File) adjustFormula(sheet, sheetN string, cell *xlsxC, dir adjustDirect
 		}
 		if f.OnFormulaAdjusted != nil && cell.F.Content != oldFormula && cell.R != "" && cell.f == "" {
 			f.OnFormulaAdjusted(sheetN, cell.R, oldFormula, cell.F.Content)
+		}
+		if cell.f == "" && formulaNewlyContainsREF(oldFormula, cell.F.Content) {
+			oldValue := cell.V
+			cell.V = formulaErrorREF
+			cell.T = "e"
+			if f.OnCellCalculated != nil && cell.R != "" && oldValue != cell.V {
+				f.OnCellCalculated(sheetN, cell.R, oldValue, cell.V)
+			}
 		}
 	}
 	return nil

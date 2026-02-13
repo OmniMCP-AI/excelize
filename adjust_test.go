@@ -1530,3 +1530,146 @@ func TestOnFormulaAdjustedCallback(t *testing.T) {
 		assert.True(t, found, "expected callback on MoveCols formula adjustment")
 	})
 }
+
+func TestRefErrorCellValueUpdate(t *testing.T) {
+	// helper to get a cell pointer for setting V/T directly in tests
+	setCellV := func(f *File, sheet, cellName, v, typ string) {
+		ws, err := f.workSheetReader(sheet)
+		assert.NoError(t, err)
+		c, _, _, err := ws.prepareCell(cellName)
+		assert.NoError(t, err)
+		c.V = v
+		c.T = typ
+	}
+
+	t.Run("RemoveRow_causes_REF", func(t *testing.T) {
+		f := NewFile()
+		// A1 references A5, removing row 5 should produce #REF!
+		assert.NoError(t, f.SetCellValue("Sheet1", "A5", 100))
+		assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "A5*2"))
+		// Pre-set a cached value to verify it gets replaced
+		setCellV(f, "Sheet1", "A1", "200", "")
+
+		var calcChanges []struct{ Sheet, Cell, Old, New string }
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			calcChanges = append(calcChanges, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldValue, newValue})
+		}
+
+		assert.NoError(t, f.RemoveRow("Sheet1", 5))
+
+		// cell.V should now be #REF!
+		val, err := f.GetCellValue("Sheet1", "A1")
+		assert.NoError(t, err)
+		assert.Equal(t, "#REF!", val)
+
+		// OnCellCalculated should have been triggered
+		found := false
+		for _, c := range calcChanges {
+			if c.Sheet == "Sheet1" && c.Cell == "A1" && c.Old == "200" && c.New == "#REF!" {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected OnCellCalculated for A1 with old=200 new=#REF!")
+	})
+
+	t.Run("RemoveCol_causes_REF", func(t *testing.T) {
+		f := NewFile()
+		// A1 references E1, removing column E should produce #REF!
+		assert.NoError(t, f.SetCellValue("Sheet1", "E1", 50))
+		assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "E1+10"))
+		setCellV(f, "Sheet1", "A1", "60", "")
+
+		var calcChanges []struct{ Sheet, Cell, Old, New string }
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			calcChanges = append(calcChanges, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldValue, newValue})
+		}
+
+		assert.NoError(t, f.RemoveCol("Sheet1", "E"))
+
+		val, err := f.GetCellValue("Sheet1", "A1")
+		assert.NoError(t, err)
+		assert.Equal(t, "#REF!", val)
+
+		found := false
+		for _, c := range calcChanges {
+			if c.Sheet == "Sheet1" && c.Cell == "A1" && c.Old == "60" && c.New == "#REF!" {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected OnCellCalculated for A1 with old=60 new=#REF!")
+	})
+
+	t.Run("InsertRow_no_REF", func(t *testing.T) {
+		f := NewFile()
+		assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "SUM(B1:B5)"))
+
+		refTriggered := false
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			if newValue == "#REF!" {
+				refTriggered = true
+			}
+		}
+
+		assert.NoError(t, f.InsertRows("Sheet1", 2, 1))
+		assert.False(t, refTriggered, "InsertRows should not produce #REF! callback")
+	})
+
+	t.Run("AlreadyHasREF_no_duplicate", func(t *testing.T) {
+		f := NewFile()
+		// Formula already contains #REF! before deletion
+		assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "#REF!+A5"))
+		setCellV(f, "Sheet1", "A1", "#REF!", "e")
+
+		callCount := 0
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			callCount++
+		}
+
+		// Remove row 5 — A5 reference becomes #REF!, but formula already had #REF!
+		assert.NoError(t, f.RemoveRow("Sheet1", 5))
+		assert.Equal(t, 0, callCount, "should not trigger OnCellCalculated when formula already had #REF!")
+	})
+
+	t.Run("CrossSheet_REF", func(t *testing.T) {
+		f := NewFile()
+		_, err := f.NewSheet("Sheet2")
+		assert.NoError(t, err)
+		assert.NoError(t, f.SetCellValue("Sheet1", "A5", 999))
+		assert.NoError(t, f.SetCellFormula("Sheet2", "B1", "Sheet1!A5*3"))
+		setCellV(f, "Sheet2", "B1", "2997", "")
+
+		var calcChanges []struct{ Sheet, Cell, Old, New string }
+		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+			calcChanges = append(calcChanges, struct{ Sheet, Cell, Old, New string }{sheet, cell, oldValue, newValue})
+		}
+
+		assert.NoError(t, f.RemoveRow("Sheet1", 5))
+
+		// Sheet2 B1 should have #REF! and callback should reference Sheet2
+		val, err := f.GetCellValue("Sheet2", "B1")
+		assert.NoError(t, err)
+		assert.Equal(t, "#REF!", val)
+
+		found := false
+		for _, c := range calcChanges {
+			if c.Sheet == "Sheet2" && c.Cell == "B1" && c.Old == "2997" && c.New == "#REF!" {
+				found = true
+			}
+		}
+		assert.True(t, found, "expected OnCellCalculated for Sheet2!B1")
+	})
+
+	t.Run("NilCallback_still_updates_value", func(t *testing.T) {
+		f := NewFile()
+		assert.NoError(t, f.SetCellValue("Sheet1", "A5", 100))
+		assert.NoError(t, f.SetCellFormula("Sheet1", "A1", "A5*2"))
+		setCellV(f, "Sheet1", "A1", "200", "")
+		f.OnCellCalculated = nil
+
+		assert.NoError(t, f.RemoveRow("Sheet1", 5))
+
+		val, err := f.GetCellValue("Sheet1", "A1")
+		assert.NoError(t, err)
+		assert.Equal(t, "#REF!", val, "cell.V should be updated even when OnCellCalculated is nil")
+	})
+}

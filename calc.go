@@ -334,6 +334,9 @@ func (fa formulaArg) ToNumber() formulaArg {
 	var n float64
 	var err error
 	switch fa.Type {
+	case ArgEmpty:
+		// Excel treats empty cells as distinct from 0 - empty cells are not numbers
+		return newErrorFormulaArg(formulaErrorVALUE, "empty cell cannot be converted to number")
 	case ArgString:
 		if fa.String == "" {
 			return newEmptyStringNumberErrorArg()
@@ -15329,6 +15332,10 @@ func (fn *formulaFuncs) ARRAYTOTEXT(argsList *list.List) formulaArg {
 	for _, rows := range argsList.Front().Value.(formulaArg).Matrix {
 		var row []string
 		for _, cell := range rows {
+			if cell.Type == ArgEmpty {
+				row = append(row, cell.Value())
+				continue
+			}
 			if num := cell.ToNumber(); num.Type != ArgNumber && format.Number == 1 {
 				row = append(row, fmt.Sprintf("\"%s\"", cell.Value()))
 				continue
@@ -16970,6 +16977,13 @@ func matchPattern(findText, withinText string, dbcs bool, startNum int) (int, bo
 // formula arguments by given conditions such as case-sensitive, if exact
 // match, and make compare result as formula criteria condition type.
 func compareFormulaArg(lhs, rhs, matchMode formulaArg, caseSensitive bool) byte {
+	// Treat ArgEmpty and ArgString("") as equivalent (Excel behavior)
+	if lhs.Type == ArgEmpty && rhs.Type == ArgString && rhs.String == "" {
+		return criteriaEq
+	}
+	if rhs.Type == ArgEmpty && lhs.Type == ArgString && lhs.String == "" {
+		return criteriaEq
+	}
 	if lhs.Type != rhs.Type {
 		return criteriaNe
 	}
@@ -16987,7 +17001,7 @@ func compareFormulaArg(lhs, rhs, matchMode formulaArg, caseSensitive bool) byte 
 		if !caseSensitive {
 			ls, rs = strings.ToLower(ls), strings.ToLower(rs)
 		}
-		if matchMode.Number == matchModeWildcard {
+		if matchMode.Number == matchModeWildcard && rs != "" {
 			if _, ok := matchPattern(rs, ls, false, 0); ok {
 				return criteriaEq
 			}
@@ -17685,7 +17699,7 @@ func lookupLinearSearch(vertical bool, lookupValue, lookupArray, matchMode, sear
 			}
 		} else if lookupValue.Type == ArgMatrix {
 			lhs = lookupArray
-		} else if lookupArray.Type == ArgString {
+		} else if lookupValue.Type == ArgString {
 			lhs = newStringFormulaArg(cell.Value())
 		}
 		if compareFormulaArg(lhs, lookupValue, matchMode, false) == criteriaEq {

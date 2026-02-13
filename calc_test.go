@@ -2030,7 +2030,6 @@ func TestCalcCellValue(t *testing.T) {
 		"VLOOKUP(INT(F2),F3:F9,1)":           "32080",
 		"VLOOKUP(INT(F2),F3:F9,1,TRUE)":      "32080",
 		"VLOOKUP(MUNIT(3),MUNIT(3),1)":       "0",
-		"VLOOKUP(A1,A3:B5,1)":                "0",
 		"VLOOKUP(A1:A2,A1:A1,1)":             "1",
 		"VLOOKUP(MUNIT(1),MUNIT(1),1,FALSE)": "1",
 		// INDEX
@@ -4098,6 +4097,7 @@ func TestCalcCellValue(t *testing.T) {
 		"VLOOKUP(ISNUMBER(1),F3:F9,1)":  {"#N/A", "VLOOKUP no result found"},
 		"VLOOKUP(INT(1),E2:E9,1)":       {"#N/A", "VLOOKUP no result found"},
 		"VLOOKUP(MUNIT(2),MUNIT(3),1)":  {"#N/A", "VLOOKUP no result found"},
+		"VLOOKUP(A1,A3:B5,1)":           {"#N/A", "VLOOKUP no result found"},
 		"VLOOKUP(1,G1:H2,1,FALSE)":      {"#N/A", "VLOOKUP no result found"},
 		// INDEX
 		"INDEX()":          {"#VALUE!", "INDEX requires 2 or 3 arguments"},
@@ -5053,6 +5053,50 @@ func TestCalcVLOOKUP(t *testing.T) {
 	argsList.PushBack(newStringFormulaArg(""))
 	_, _, _, _, err := checkHVLookupArgs("VLOOKUP", argsList)
 	assert.Equal(t, ArgError, err.Type)
+}
+
+func TestCalcVLOOKUPEmpty(t *testing.T) {
+	cellData := [][]interface{}{
+		{"ID", "Name", "Value"},
+		{1, "Alice", 100},
+		{2, nil, 200},
+		{3, "Bob", 300},
+		{nil, "Carol", 400},
+		{5, "", 500},
+	}
+	f := prepareCalcData(cellData)
+	// VLOOKUP("", ...) should match the first empty cell in the lookup column
+	// Row 3 has nil in column B (empty cell), row 6 has "" in column B
+	calc := map[string]string{
+		// Lookup empty string in B column, should match first empty cell (B3)
+		`VLOOKUP("",B1:C6,2,FALSE)`: "200",
+		// Lookup empty value in A column, should match first empty cell (A5)
+		`VLOOKUP("",A1:C6,3,FALSE)`: "400",
+	}
+	for formula, expected := range calc {
+		assert.NoError(t, f.SetCellFormula("Sheet1", "H1", formula))
+		result, err := f.CalcCellValue("Sheet1", "H1")
+		assert.NoError(t, err, formula)
+		assert.Equal(t, expected, result, formula)
+	}
+	// Lookup using a reference to an empty cell (ArgEmpty)
+	// G1 is empty, so VLOOKUP(G1, ...) should behave same as VLOOKUP("", ...)
+	assert.NoError(t, f.SetCellFormula("Sheet1", "H2", `VLOOKUP(G1,B1:C6,2,FALSE)`))
+	result, err := f.CalcCellValue("Sheet1", "H2")
+	assert.NoError(t, err)
+	assert.Equal(t, "200", result)
+	// Normal lookups should still work
+	normalCalc := map[string]string{
+		`VLOOKUP("Alice",B1:C6,2,FALSE)`: "100",
+		`VLOOKUP("Bob",B1:C6,2,FALSE)`:   "300",
+		`VLOOKUP(1,A1:C6,2,FALSE)`:       "Alice",
+	}
+	for formula, expected := range normalCalc {
+		assert.NoError(t, f.SetCellFormula("Sheet1", "H1", formula))
+		result, err := f.CalcCellValue("Sheet1", "H1")
+		assert.NoError(t, err, formula)
+		assert.Equal(t, expected, result, formula)
+	}
 }
 
 func TestCalcBoolean(t *testing.T) {
