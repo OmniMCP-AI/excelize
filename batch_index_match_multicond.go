@@ -34,6 +34,7 @@ type indexMatchMultiCondFormula struct {
 	sheet           string
 	lookupCells     []string // e.g., ["ERP!B2", "ERP!F2"] - cells containing lookup values
 	originalFormula string
+	fallbackValue   string // IFERROR fallback value (e.g., "AE3791" or literal value)
 }
 
 // extractIndexMatchMultiCondPattern extracts multi-condition INDEX-MATCH pattern from formula
@@ -52,9 +53,22 @@ func (f *File) extractIndexMatchMultiCondPattern(sheet, cell, formula string) *i
 		return nil
 	}
 
-	// Remove IFERROR wrapper if present
+	// Extract IFERROR fallback value if present
+	var fallbackValue string
 	workFormula := strings.TrimPrefix(formula, "=")
 	if strings.HasPrefix(workFormula, "IFERROR(") {
+		// Extract the full IFERROR expression
+		iferrorContent := extractFunctionCall(workFormula, "IFERROR")
+		if iferrorContent != "" {
+			// Split IFERROR arguments: first is the formula, second is the fallback
+			iferrorArgs := splitFunctionArgs(iferrorContent)
+			if len(iferrorArgs) >= 2 {
+				fallbackValue = strings.TrimSpace(iferrorArgs[1])
+				// Remove quotes if it's a literal string
+				fallbackValue = strings.Trim(fallbackValue, `"'`)
+			}
+		}
+
 		// Find the INDEX( position
 		idxPos := strings.Index(workFormula, "INDEX(")
 		if idxPos > 0 {
@@ -130,6 +144,7 @@ func (f *File) extractIndexMatchMultiCondPattern(sheet, cell, formula string) *i
 		sheet:           sheet,
 		lookupCells:     lookupCells,
 		originalFormula: formula,
+		fallbackValue:   fallbackValue,
 	}
 
 	return pattern
@@ -410,7 +425,23 @@ func (f *File) calculateIndexMatchMultiCondPatternWithCache(pattern *indexMatchM
 		if matchedRow >= 0 && matchedRow < len(rows) && resultColIdx < len(rows[matchedRow]) {
 			results[fullCell] = rows[matchedRow][resultColIdx]
 		} else {
-			results[fullCell] = "" // IFERROR will handle this
+			// No match found - use fallback value if available
+			if info.fallbackValue != "" {
+				// Fallback value can be a cell reference or a literal value
+				// If it's a cell reference (contains no operators and looks like a cell), get its value
+				fallback := info.fallbackValue
+				if isCellReference(fallback) {
+					// It's a cell reference like "AE3791"
+					fallbackVal := f.getCellValueOrCalcCache(info.sheet, fallback, worksheetCache)
+					results[fullCell] = fallbackVal
+				} else {
+					// It's a literal value
+					results[fullCell] = fallback
+				}
+			} else {
+				// No fallback specified, return empty string
+				results[fullCell] = ""
+			}
 		}
 	}
 
@@ -477,4 +508,38 @@ func isMultiCondIndexMatchFormula(formula string) bool {
 	return strings.Contains(upperFormula, "INDEX(") &&
 		strings.Contains(formula, "MATCH(1,") &&
 		(strings.Contains(formula, "*ISNUMBER(FIND(") || strings.Contains(formula, ")*ISNUMBER(FIND("))
+}
+
+// isCellReference checks if a string looks like a cell reference (e.g., "A1", "AE3791", "$B$5")
+// Returns true if it's a valid cell reference without operators or functions
+func isCellReference(s string) bool {
+	// Remove $ signs
+	s = strings.ReplaceAll(s, "$", "")
+
+	// Empty or too short
+	if len(s) < 2 {
+		return false
+	}
+
+	// Check if it contains operators or parentheses (indicating it's an expression/function)
+	if strings.ContainsAny(s, "+-*/()") {
+		return false
+	}
+
+	// Basic pattern: letters followed by numbers
+	// A simple heuristic: first character should be a letter
+	if s[0] < 'A' || s[0] > 'Z' {
+		return false
+	}
+
+	// Should have at least one digit
+	hasDigit := false
+	for _, ch := range s {
+		if ch >= '0' && ch <= '9' {
+			hasDigit = true
+			break
+		}
+	}
+
+	return hasDigit
 }
