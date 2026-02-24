@@ -15,9 +15,10 @@ type indexMatch1DPattern struct {
 }
 
 type indexMatch1DFormula struct {
-	cell       string
-	sheet      string
-	lookupCell string // e.g., "A2"
+	cell          string
+	sheet         string
+	lookupCell    string // e.g., "A2"
+	fallbackValue string // IFERROR fallback value
 }
 
 // averageIndexMatchPattern represents AVERAGE(INDEX(range, MATCH(...), 0)) pattern
@@ -569,14 +570,31 @@ func (f *File) extractINDEXMATCH1DPattern(sheet, cell, formula string) *indexMat
 		return nil
 	}
 
-	// Remove leading = if present
+	// Extract IFERROR fallback value if present
+	var fallbackValue string
 	workFormula := strings.TrimPrefix(formula, "=")
+	originalFormula := workFormula
+
+	if strings.HasPrefix(workFormula, "IFERROR(") {
+		// Extract the full IFERROR expression
+		iferrorContent := extractFunctionCall(workFormula, "IFERROR")
+		if iferrorContent != "" {
+			// Split IFERROR arguments: first is the formula, second is the fallback
+			iferrorArgs := splitFunctionArgs(iferrorContent)
+			if len(iferrorArgs) >= 2 {
+				fallbackValue = strings.TrimSpace(iferrorArgs[1])
+				// Remove quotes if it's a literal string
+				fallbackValue = strings.Trim(fallbackValue, `"'`)
+			}
+		}
+	}
 
 	// Remove wrapper functions (IFERROR, AVERAGE, etc.) to find INDEX
 	// Support patterns like:
 	//   IFERROR(AVERAGE(INDEX(...)))
 	//   AVERAGE(INDEX(...))
 	//   IFERROR(INDEX(...))
+	workFormula = originalFormula
 	for {
 		trimmed := false
 
@@ -651,9 +669,10 @@ func (f *File) extractINDEXMATCH1DPattern(sheet, cell, formula string) *indexMat
 	}
 
 	pattern.formulas[sheet+"!"+cell] = &indexMatch1DFormula{
-		cell:       cell,
-		sheet:      sheet,
-		lookupCell: lookupCell,
+		cell:          cell,
+		sheet:         sheet,
+		lookupCell:    lookupCell,
+		fallbackValue: fallbackValue,
 	}
 
 	return pattern
@@ -726,7 +745,20 @@ func (f *File) calculateINDEXMATCH1DPattern(pattern *indexMatch1DPattern) map[st
 				results[fullCell] = ""
 			}
 		} else {
-			results[fullCell] = ""
+			// No match found - use fallback value if available
+			if info.fallbackValue != "" {
+				// Fallback value can be a cell reference or a literal value
+				if isCellReference(info.fallbackValue) {
+					// It's a cell reference like "A1"
+					fallbackVal, _ := f.GetCellValue(info.sheet, info.fallbackValue)
+					results[fullCell] = fallbackVal
+				} else {
+					// It's a literal value
+					results[fullCell] = info.fallbackValue
+				}
+			} else {
+				results[fullCell] = ""
+			}
 		}
 	}
 
@@ -1441,7 +1473,20 @@ func (f *File) calculateINDEXMATCH1DPatternWithCache(pattern *indexMatch1DPatter
 				results[fullCell] = ""
 			}
 		} else {
-			results[fullCell] = ""
+			// No match found - use fallback value if available
+			if info.fallbackValue != "" {
+				// Fallback value can be a cell reference or a literal value
+				if isCellReference(info.fallbackValue) {
+					// It's a cell reference like "A1"
+					fallbackVal := f.getCellValueOrCalcCache(info.sheet, info.fallbackValue, worksheetCache)
+					results[fullCell] = fallbackVal
+				} else {
+					// It's a literal value
+					results[fullCell] = info.fallbackValue
+				}
+			} else {
+				results[fullCell] = ""
+			}
 		}
 	}
 
