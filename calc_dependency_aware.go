@@ -287,9 +287,6 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 
 	// Calculate and update warmup cells sequentially
 	for _, cell := range warmupList {
-		// Get old value for callback
-		oldValue, _ := f.GetCellValue(sheet, cell)
-
 		result, err := f.CalcCellValue(sheet, cell, options.CalcOptions)
 		if err != nil {
 			allErrors = append(allErrors, fmt.Errorf("failed to calculate %s: %w", cell, err))
@@ -300,16 +297,9 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 		}
 		results[cell] = result
 
-		// Update cell value
-		if err := f.SetCellValue(sheet, cell, result); err != nil {
-			allErrors = append(allErrors, fmt.Errorf("failed to update %s: %w", cell, err))
-			continue
-		}
-
-		// Trigger callback if value changed
-		if f.OnCellCalculated != nil && oldValue != result {
-			f.OnCellCalculated(sheet, cell, oldValue, result)
-		}
+		// Update cell cached value (preserves formula)
+		// Note: setFormulaValue internally triggers OnCellCalculated callback
+		f.setFormulaValue(sheet, cell, result)
 	}
 
 	if options.EnableDebug {
@@ -352,16 +342,9 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 	}
 	chunkSize := (len(remaining) + numWorkers - 1) / numWorkers
 
-	type callbackInfo struct {
-		cell     string
-		oldValue string
-		newValue string
-	}
-
 	type workerResult struct {
-		results   map[string]string
-		callbacks []callbackInfo
-		errors    []error
+		results map[string]string
+		errors  []error
 	}
 
 	resultChan := make(chan workerResult, numWorkers)
@@ -382,13 +365,9 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 		go func(cellChunk []string, workerID int) {
 			defer wg.Done()
 			localResults := make(map[string]string, len(cellChunk))
-			var localCallbacks []callbackInfo
 			var localErrors []error
 
 			for _, cell := range cellChunk {
-				// Get old value for callback
-				oldValue, _ := f.GetCellValue(sheet, cell)
-
 				result, err := f.CalcCellValue(sheet, cell, options.CalcOptions)
 				if err != nil {
 					localErrors = append(localErrors, fmt.Errorf("failed to calculate %s: %w", cell, err))
@@ -396,26 +375,14 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 				}
 				localResults[cell] = result
 
-				// Update cell value
-				if err := f.SetCellValue(sheet, cell, result); err != nil {
-					localErrors = append(localErrors, fmt.Errorf("failed to update %s: %w", cell, err))
-					continue
-				}
-
-				// Record callback info if value changed
-				if oldValue != result {
-					localCallbacks = append(localCallbacks, callbackInfo{
-						cell:     cell,
-						oldValue: oldValue,
-						newValue: result,
-					})
-				}
+				// Update cell cached value (preserves formula)
+				// Note: setFormulaValue internally triggers OnCellCalculated callback
+				f.setFormulaValue(sheet, cell, result)
 			}
 
 			resultChan <- workerResult{
-				results:   localResults,
-				callbacks: localCallbacks,
-				errors:    localErrors,
+				results: localResults,
+				errors:  localErrors,
 			}
 		}(remaining[chunkStart:chunkEnd], i)
 	}
@@ -427,27 +394,18 @@ func (f *File) CalcAndUpdateCellValuesDependencyAware(sheet string, cells []stri
 	}()
 
 	// Collect results from all workers
-	var allCallbacks []callbackInfo
 	for wr := range resultChan {
 		for k, v := range wr.results {
 			results[k] = v
 		}
-		allCallbacks = append(allCallbacks, wr.callbacks...)
 		allErrors = append(allErrors, wr.errors...)
-	}
-
-	// Trigger callbacks sequentially (to avoid race conditions in user callback code)
-	if f.OnCellCalculated != nil {
-		for _, cb := range allCallbacks {
-			f.OnCellCalculated(sheet, cb.cell, cb.oldValue, cb.newValue)
-		}
 	}
 
 	if options.EnableDebug {
 		concurrentElapsed := time.Since(concurrentStart)
 		fmt.Printf("Phase 2 completed: %d cells calculated and updated, elapsed: %v\n", len(remaining), concurrentElapsed)
-		fmt.Printf("Total: %d cells, %d successful, %d failed, %d callbacks triggered\n",
-			len(cells), len(results), len(allErrors), len(allCallbacks))
+		fmt.Printf("Total: %d cells, %d successful, %d failed\n",
+			len(cells), len(results), len(allErrors))
 	}
 
 	// Clear range cache after batch calculation to free memory

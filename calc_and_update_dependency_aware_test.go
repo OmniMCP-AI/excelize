@@ -113,17 +113,21 @@ func TestCalcAndUpdateCellValuesDependencyAware(t *testing.T) {
 		f.SetCellValue(sheet, "A1", 5)
 		f.SetCellFormula(sheet, "B1", "A1")
 
-		// Pre-set B1 value to expected result
-		f.SetCellValue(sheet, "B1", "5")
+		// First calculation - this will set B1's cached value to "5"
+		_, err := f.CalcAndUpdateCellValuesDependencyAware(sheet, []string{"B1"}, CalcCellValuesDependencyAwareOptions{})
+		if err != nil {
+			t.Fatalf("First calculation failed: %v", err)
+		}
 
-		// Track callbacks
+		// Track callbacks for second calculation
 		callbackCount := 0
 		f.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
 			callbackCount++
 		}
 
+		// Second calculation - value should be same, no callback expected
 		cells := []string{"B1"}
-		_, err := f.CalcAndUpdateCellValuesDependencyAware(sheet, cells, CalcCellValuesDependencyAwareOptions{})
+		_, err = f.CalcAndUpdateCellValuesDependencyAware(sheet, cells, CalcCellValuesDependencyAwareOptions{})
 
 		if err != nil {
 			t.Fatalf("CalcAndUpdateCellValuesDependencyAware failed: %v", err)
@@ -346,6 +350,50 @@ func TestCalcAndUpdateVsCalcOnly(t *testing.T) {
 		val2, _ := f2.GetCellValue(sheet, "B1")
 		if val2 != "" && val2 != "0" {
 			t.Errorf("CalcOnly shouldn't write B1: got %s", val2)
+		}
+	})
+
+	t.Run("Formulas are preserved after update", func(t *testing.T) {
+		f := NewFile()
+		sheet := "Sheet1"
+
+		// Set up test data
+		f.SetCellValue(sheet, "A1", 10)
+		f.SetCellFormula(sheet, "B1", "A1*2")
+		f.SetCellFormula(sheet, "B2", "A1*3")
+
+		cells := []string{"B1", "B2"}
+		results, err := f.CalcAndUpdateCellValuesDependencyAware(sheet, cells, CalcCellValuesDependencyAwareOptions{})
+
+		if err != nil {
+			t.Fatalf("CalcAndUpdateCellValuesDependencyAware failed: %v", err)
+		}
+
+		// Verify results
+		if results["B1"] != "20" || results["B2"] != "30" {
+			t.Errorf("Unexpected results: %v", results)
+		}
+
+		// CRITICAL: Verify formulas are still present
+		formula1, err := f.GetCellFormula(sheet, "B1")
+		if err != nil || formula1 != "A1*2" {
+			t.Errorf("Expected formula 'A1*2' in B1, got '%s', err: %v", formula1, err)
+		}
+
+		formula2, err := f.GetCellFormula(sheet, "B2")
+		if err != nil || formula2 != "A1*3" {
+			t.Errorf("Expected formula 'A1*3' in B2, got '%s', err: %v", formula2, err)
+		}
+
+		// Verify cached values are correct
+		val1, _ := f.GetCellValue(sheet, "B1")
+		if val1 != "20" {
+			t.Errorf("Expected cached value '20' in B1, got '%s'", val1)
+		}
+
+		val2, _ := f.GetCellValue(sheet, "B2")
+		if val2 != "30" {
+			t.Errorf("Expected cached value '30' in B2, got '%s'", val2)
 		}
 	})
 }
