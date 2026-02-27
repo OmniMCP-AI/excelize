@@ -1039,7 +1039,7 @@ func (f *File) moveCellDataForCols(sheet string, fromCol, count, toCol int) erro
 		}
 	}
 
-	// Apply the column mapping
+	// Apply the column mapping to cell data
 	for rowIdx := range ws.SheetData.Row {
 		for cellIdx := range ws.SheetData.Row[rowIdx].C {
 			colNum, rowNum, _ := CellNameToCoordinates(ws.SheetData.Row[rowIdx].C[cellIdx].R)
@@ -1049,6 +1049,58 @@ func (f *File) moveCellDataForCols(sheet string, fromCol, count, toCol int) erro
 		}
 		// 按列顺序重新排序单元格，确保 XML 序列化和流式读取时顺序正确
 		sortCellsByColumn(ws.SheetData.Row[rowIdx].C)
+	}
+
+	// Move column dimensions (widths, styles, etc.)
+	if ws.Cols != nil && len(ws.Cols.Col) > 0 {
+		// Collect old column definitions indexed by their column range
+		oldColDefs := make(map[int]xlsxCol)
+		for _, col := range ws.Cols.Col {
+			// Each xlsxCol can define a range from Min to Max
+			// For simplicity, we assume each column has its own definition (Min == Max)
+			// or we handle the most common case where Min == Max
+			if col.Min == col.Max {
+				oldColDefs[col.Min] = col
+			} else {
+				// Handle range: split it into individual columns
+				for c := col.Min; c <= col.Max; c++ {
+					oldColDefs[c] = xlsxCol{
+						Min:          c,
+						Max:          c,
+						Width:        col.Width,
+						Style:        col.Style,
+						CustomWidth:  col.CustomWidth,
+						Hidden:       col.Hidden,
+						BestFit:      col.BestFit,
+						Collapsed:    col.Collapsed,
+						OutlineLevel: col.OutlineLevel,
+						Phonetic:     col.Phonetic,
+					}
+				}
+			}
+		}
+
+		// Create new column definitions based on mapping
+		newColDefs := make(map[int]xlsxCol)
+		for oldCol, colDef := range oldColDefs {
+			if newCol, shouldMove := colMapping[oldCol]; shouldMove {
+				// Update column range
+				colDef.Min = newCol
+				colDef.Max = newCol
+				newColDefs[newCol] = colDef
+			} else {
+				// Column not affected by move
+				newColDefs[oldCol] = colDef
+			}
+		}
+
+		// Rebuild the Cols array
+		ws.Cols.Col = ws.Cols.Col[:0]
+		for col := 1; col <= MaxColumns; col++ {
+			if colDef, exists := newColDefs[col]; exists {
+				ws.Cols.Col = append(ws.Cols.Col, colDef)
+			}
+		}
 	}
 
 	return nil
