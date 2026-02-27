@@ -427,22 +427,323 @@ func adjustFormulaOperandRef(row, col, operand string, abs, keepRelative bool, d
 // adjustFormulaOperand adjust range operand tokens for the formula.
 func (f *File) adjustFormulaOperand(sheet, sheetN string, keepRelative bool, token efp.Token, dir adjustDirection, num int, offset int, isDuplicate bool) (string, error) {
 	var (
-		err                          error
-		abs                          bool
-		sheetName, col, row, operand string
-		cell                         = token.TValue
-		tokens                       = strings.Split(token.TValue, "!")
+		err             error
+		sheetName, cell string
+		crossSheet      bool
 	)
-	if len(tokens) == 2 { // have a worksheet
-		sheetName, cell = tokens[0], tokens[1]
-		operand = escapeSheetName(sheetName) + "!"
+
+	// Parse sheet reference from token
+	// Handle both "Sheet1!A1" and "Sheet1!A1:Sheet1!C1"
+	if idx := strings.Index(token.TValue, "!"); idx != -1 {
+		sheetName = token.TValue[:idx]
+		cell = token.TValue[idx+1:]
+		crossSheet = true
+	} else {
+		cell = token.TValue
 	}
+
 	if sheetName == "" {
 		sheetName = sheetN
 	}
+
+	// IMPORTANT: For cross-sheet references, we need to adjust them if they reference the sheet being modified
 	if sheet != sheetName {
+		// Different sheet, no adjustment needed
+		operand := ""
+		if crossSheet {
+			operand = escapeSheetName(sheetName) + "!"
+		}
 		return operand + cell, err
 	}
+
+	// Check if this is a range (contains ":")
+	if strings.Contains(cell, ":") {
+		// Split range into parts
+		rangeParts := strings.Split(cell, ":")
+		if len(rangeParts) < 2 {
+			// Invalid range, return as-is
+			operand := ""
+			if crossSheet {
+				operand = escapeSheetName(sheetName) + "!"
+			}
+			return operand + cell, nil
+		}
+
+		// Handle special case: multi-colon ranges like A2:A3:A4
+		// These should be adjusted part by part
+		if len(rangeParts) > 2 {
+			// Adjust each part independently
+			var adjustedParts []string
+			for _, part := range rangeParts {
+				// Check if part has sheet reference
+				var partSheetName string
+				if idx := strings.Index(part, "!"); idx != -1 {
+					partSheetName = part[:idx]
+					part = part[idx+1:]
+				}
+
+				adjusted, err := f.adjustSingleCellRef(part, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate)
+				if err != nil {
+					return "", err
+				}
+
+				if partSheetName != "" {
+					adjusted = escapeSheetName(partSheetName) + "!" + adjusted
+				}
+				adjustedParts = append(adjustedParts, adjusted)
+			}
+
+			// Build result with sheet prefix if cross-sheet
+			operand := ""
+			if crossSheet && !strings.Contains(adjustedParts[0], "!") {
+				operand = escapeSheetName(sheetName) + "!"
+			}
+
+			return operand + strings.Join(adjustedParts, ":"), nil
+		}
+
+		// Handle normal 2-part range: "A1:C1" or "A1:Sheet1!C1"
+		startCell := rangeParts[0]
+		endCell := rangeParts[1]
+
+		// Check if end cell has a sheet reference
+		var endSheetName string
+		if idx := strings.Index(endCell, "!"); idx != -1 {
+			endSheetName = endCell[:idx]
+			endCell = endCell[idx+1:]
+		}
+
+		// CRITICAL FIX: For range boundaries, we need special handling when columns/rows are deleted
+		// Instead of returning #REF! for deleted boundaries, we adjust them
+
+		// First, check if both boundaries are in the deleted range AND in the same column/row
+		// This handles cases like A1:A5 where deleting column A should give #REF!
+		startCol, startRow, _, startErr := f.parseCellRef(startCell, dir)
+		endCol, endRow, _, endErr := f.parseCellRef(endCell, dir)
+
+		if startErr == nil && endErr == nil {
+			// Check if both are being deleted and in same column/row
+			startInDeleteRange := false
+			endInDeleteRange := false
+
+			if dir == columns && offset < 0 {
+				startInDeleteRange = startCol >= num && startCol < num-offset
+				endInDeleteRange = endCol >= num && endCol < num-offset
+				// If both in delete range AND same column, entire range is deleted
+				if startInDeleteRange && endInDeleteRange && startCol == endCol {
+					return "#REF!", nil
+				}
+			} else if dir == rows && offset < 0 {
+				startInDeleteRange = startRow >= num && startRow < num-offset
+				endInDeleteRange = endRow >= num && endRow < num-offset
+				// If both in delete range AND same row, entire range is deleted
+				if startInDeleteRange && endInDeleteRange && startRow == endRow {
+					return "#REF!", nil
+				}
+			}
+		}
+
+		startAdjusted, startDeleted, err := f.adjustRangeBoundary(startCell, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate, true)
+		if err != nil {
+			return "", err
+		}
+
+		endAdjusted, endDeleted, err := f.adjustRangeBoundary(endCell, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate, false)
+		if err != nil {
+			return "", err
+		}
+
+		// If both boundaries are deleted, entire range is invalid
+		if startDeleted && endDeleted {
+			return "#REF!", nil
+		}
+
+		// Build result
+		operand := ""
+		if crossSheet {
+			operand = escapeSheetName(sheetName) + "!"
+		}
+
+		// For fully qualified ranges, rebuild with sheet prefix on end
+		endOperand := ""
+		if endSheetName != "" {
+			endOperand = escapeSheetName(endSheetName) + "!"
+		}
+
+		result := operand + startAdjusted + ":" + endOperand + endAdjusted
+
+		// If cross-sheet and contains #REF!, simplify to just #REF!
+		if crossSheet && (strings.Contains(result, "#REF!")) {
+			if (startDeleted || strings.Contains(startAdjusted, "#REF!")) &&
+				(endDeleted || strings.Contains(endAdjusted, "#REF!")) {
+				return "#REF!", nil
+			}
+		}
+
+		return result, nil
+	}
+
+	// Single cell reference - use existing logic
+	adjusted, err := f.adjustSingleCellRef(cell, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate)
+	if err != nil {
+		return "", err
+	}
+
+	operand := ""
+	if crossSheet {
+		operand = escapeSheetName(sheetName) + "!"
+	}
+
+	result := operand + adjusted
+
+	// CRITICAL FIX: For cross-sheet single cell references, if it becomes #REF!, remove sheet prefix
+	if crossSheet && (adjusted == "#REF!" || strings.Contains(adjusted, "#REF!")) {
+		if adjusted == "#REF!" || adjusted == "A#REF!" || adjusted == "#REF!1" ||
+			strings.HasPrefix(adjusted, "#REF!") || strings.HasSuffix(adjusted, "#REF!") {
+			return "#REF!", nil
+		}
+	}
+
+	return result, nil
+}
+
+// adjustRangeBoundary adjusts a single boundary of a range reference
+// Returns: (adjusted reference, was deleted, error)
+// When a range boundary is deleted:
+// - For range END being deleted (e.g., C in A:C): return the column BEFORE deletion (B)
+// - For range START being deleted (e.g., A in A:C): return the column AFTER adjustment (new A, was B)
+func (f *File) adjustRangeBoundary(cell, sheet, sheetN string, keepRelative bool, dir adjustDirection, num int, offset int, isDuplicate bool, isStart bool) (string, bool, error) {
+	// Parse the cell reference to check if it's being deleted
+	col, row, abs, err := f.parseCellRef(cell, dir)
+	if err != nil {
+		// If we can't parse it, just use the regular adjustment
+		adjusted, err := f.adjustSingleCellRef(cell, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate)
+		return adjusted, strings.Contains(adjusted, "#REF!"), err
+	}
+
+	// Check if this boundary is in the deletion range
+	isBeingDeleted := false
+	if dir == columns && col >= num && col < num-offset && offset < 0 {
+		isBeingDeleted = true
+	} else if dir == rows && row >= num && row < num-offset && offset < 0 {
+		isBeingDeleted = true
+	}
+
+	if isBeingDeleted {
+		// Range boundary is being deleted
+		// Excel/Google Sheets behavior:
+		// - If deleting a single column range (e.g., A1:A5, delete A): entire range becomes #REF!
+		// - If deleting end of multi-column range (e.g., A1:C1, delete C): adjust to A1:B1
+		// - If deleting start of multi-column range (e.g., A1:C1, delete A): adjust to A1:B1 (B becomes new A)
+
+		if isStart {
+			// For range START being deleted:
+			// We need to check if there's anything left AFTER the deleted range
+			// Example: A1:C1, delete A → B becomes new start (adjusts to A after deletion)
+			if dir == columns {
+				// After deleting column at 'num', check if there's a next column
+				// If offset is -1 (deleting 1 column), the next column would be at num+1 (before delete)
+				// But we need to check if that's still within the range
+				// For now, let's mark as deleted and let the range logic decide
+				// Actually, we should return the adjusted position but also mark that it was affected
+				// Let me return the NEW column position
+				newCol := num // After deletion, the next column becomes this position
+				if newCol < 1 {
+					return "#REF!", true, nil
+				}
+				colName, _ := ColumnNumberToName(newCol)
+				if abs {
+					return "$" + colName + "$" + strconv.Itoa(row), false, nil
+				}
+				return colName + strconv.Itoa(row), false, nil
+			} else {
+				// rows
+				newRow := num
+				if newRow < 1 {
+					return "#REF!", true, nil
+				}
+				colName, _ := ColumnNumberToName(col)
+				if abs {
+					return "$" + colName + "$" + strconv.Itoa(newRow), false, nil
+				}
+				return colName + strconv.Itoa(newRow), false, nil
+			}
+		} else {
+			// For range END: use the position BEFORE the deleted range
+			// Example: A1:C1, delete C → range becomes A1:B1
+			if dir == columns {
+				// Use column before the deletion
+				newCol := num - 1
+				if newCol < 1 {
+					// Range would become invalid
+					return "#REF!", true, nil
+				}
+				colName, _ := ColumnNumberToName(newCol)
+				if abs {
+					return "$" + colName + "$" + strconv.Itoa(row), false, nil
+				}
+				return colName + strconv.Itoa(row), false, nil
+			} else {
+				// rows
+				newRow := num - 1
+				if newRow < 1 {
+					return "#REF!", true, nil
+				}
+				colName, _ := ColumnNumberToName(col)
+				if abs {
+					return "$" + colName + "$" + strconv.Itoa(newRow), false, nil
+				}
+				return colName + strconv.Itoa(newRow), false, nil
+			}
+		}
+	}
+
+	// Not being deleted, use regular adjustment
+	adjusted, err := f.adjustSingleCellRef(cell, sheet, sheetN, keepRelative, dir, num, offset, isDuplicate)
+	return adjusted, strings.Contains(adjusted, "#REF!"), err
+}
+
+// parseCellRef parses a cell reference and returns column number, row number, and whether it's absolute
+func (f *File) parseCellRef(cell string, dir adjustDirection) (col int, row int, abs bool, err error) {
+	// Simple parser for cell references like A1, $A$1, etc.
+	var colPart, rowPart string
+	abs = strings.Contains(cell, "$")
+	cell = strings.ReplaceAll(cell, "$", "")
+
+	// Extract column letters and row numbers
+	for _, r := range cell {
+		if ('A' <= r && r <= 'Z') || ('a' <= r && r <= 'z') {
+			colPart += string(r)
+		} else if '0' <= r && r <= '9' {
+			rowPart += string(r)
+		}
+	}
+
+	if colPart != "" {
+		col, err = ColumnNameToNumber(colPart)
+		if err != nil {
+			return 0, 0, false, err
+		}
+	}
+
+	if rowPart != "" {
+		row, err = strconv.Atoi(rowPart)
+		if err != nil {
+			return 0, 0, false, err
+		}
+	}
+
+	return col, row, abs, nil
+}
+
+// adjustSingleCellRef adjusts a single cell reference (not a range)
+func (f *File) adjustSingleCellRef(cell, sheet, sheetN string, keepRelative bool, dir adjustDirection, num int, offset int, isDuplicate bool) (string, error) {
+	var (
+		err               error
+		abs               bool
+		col, row, operand string
+	)
+
 	for _, r := range cell {
 		if r == '$' {
 			if col, operand, _, err = adjustFormulaColumnName(col, operand, abs, keepRelative, dir, num, offset, isDuplicate); err != nil {

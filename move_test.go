@@ -453,7 +453,7 @@ func TestMoveCols(t *testing.T) {
 
 	// Move columns B,C,D (count=3) to column G
 	// Before: A, B, C, D, E, F, G, H, I, J
-	// After:  A, E, F, G, H, I, B, C, D, J
+	// After:  A, E, F, G, B, C, D, H, I, J
 	assert.NoError(t, f.MoveCols("Sheet1", "B", 3, "G"))
 
 	// Verify data positions
@@ -470,26 +470,26 @@ func TestMoveCols(t *testing.T) {
 	assert.Equal(t, "ColG", valD, "Column G should shift left to position D")
 
 	valE, _ := f.GetCellValue("Sheet1", "E1")
-	assert.Equal(t, "ColH", valE, "Column H should shift left to position E")
+	assert.Equal(t, "ColB", valE, "Column B should move to position E (original G position after shift)")
 
 	valF, _ := f.GetCellValue("Sheet1", "F1")
-	assert.Equal(t, "ColI", valF, "Column I should shift left to position F")
+	assert.Equal(t, "ColC", valF, "Column C should move to position F")
 
 	valG, _ := f.GetCellValue("Sheet1", "G1")
-	assert.Equal(t, "ColB", valG, "Column B should move to position G")
+	assert.Equal(t, "ColD", valG, "Column D should move to position G")
 
 	valH, _ := f.GetCellValue("Sheet1", "H1")
-	assert.Equal(t, "ColC", valH, "Column C should move to position H")
+	assert.Equal(t, "ColH", valH, "Column H should stay")
 
 	valI, _ := f.GetCellValue("Sheet1", "I1")
-	assert.Equal(t, "ColD", valI, "Column D should move to position I")
+	assert.Equal(t, "ColI", valI, "Column I should stay")
 
 	valJ, _ := f.GetCellValue("Sheet1", "J1")
 	assert.Equal(t, "ColJ", valJ, "Column J should stay")
 
 	// Verify formulas updated
 	formula1, _ := f.GetCellFormula("Sheet1", "A2")
-	assert.Equal(t, "G1+H1+I1", formula1, "Formula should reference moved columns (now at G,H,I)")
+	assert.Equal(t, "E1+F1+G1", formula1, "Formula should reference moved columns (now at E,F,G)")
 
 	// Original E2 had formula "G1" and is now at B2 (column shifted left)
 	// And G1 shifted left to D1

@@ -14,9 +14,9 @@ func TestRemoveRowWithFormulaRef(t *testing.T) {
 	assert.NoError(t, f.SetCellValue("Sheet1", "A1", 10))
 	assert.NoError(t, f.SetCellValue("Sheet1", "A2", 20))
 	assert.NoError(t, f.SetCellValue("Sheet1", "A3", 30))
-	assert.NoError(t, f.SetCellFormula("Sheet1", "B1", "A2"))      // References A2
-	assert.NoError(t, f.SetCellFormula("Sheet1", "B2", "A2*2"))    // References A2
-	assert.NoError(t, f.SetCellFormula("Sheet1", "B3", "A3+A2"))   // References A2 and A3
+	assert.NoError(t, f.SetCellFormula("Sheet1", "B1", "A2"))    // References A2
+	assert.NoError(t, f.SetCellFormula("Sheet1", "B2", "A2*2"))  // References A2
+	assert.NoError(t, f.SetCellFormula("Sheet1", "B3", "A3+A2")) // References A2 and A3
 
 	// Remove row 2 (A2 is deleted)
 	assert.NoError(t, f.RemoveRow("Sheet1", 2))
@@ -53,11 +53,11 @@ func TestRemoveRowCrossSheetRef(t *testing.T) {
 	// Verify cross-sheet formulas now contain #REF!
 	formula1, err := f.GetCellFormula("Sheet1", "A1")
 	assert.NoError(t, err)
-	assert.Equal(t, "Data!A#REF!", formula1)
+	assert.Equal(t, "#REF!", formula1)
 
 	formula2, err := f.GetCellFormula("Sheet1", "A2")
 	assert.NoError(t, err)
-	assert.Equal(t, "Data!A#REF!*2", formula2)
+	assert.Equal(t, "#REF!*2", formula2)
 
 	formula3, err := f.GetCellFormula("Sheet1", "A3")
 	assert.NoError(t, err)
@@ -108,8 +108,8 @@ func TestRemoveColWithFormulaRef(t *testing.T) {
 	assert.NoError(t, f.SetCellValue("Sheet1", "A1", 10))
 	assert.NoError(t, f.SetCellValue("Sheet1", "B1", 20))
 	assert.NoError(t, f.SetCellValue("Sheet1", "C1", 30))
-	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "B1*2"))    // References B1
-	assert.NoError(t, f.SetCellFormula("Sheet1", "E1", "A1+B1"))   // References B1 and A1
+	assert.NoError(t, f.SetCellFormula("Sheet1", "D1", "B1*2"))  // References B1
+	assert.NoError(t, f.SetCellFormula("Sheet1", "E1", "A1+B1")) // References B1 and A1
 
 	// Remove column B
 	assert.NoError(t, f.RemoveCol("Sheet1", "B"))

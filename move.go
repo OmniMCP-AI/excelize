@@ -967,7 +967,7 @@ func (f *File) MoveCols(sheet string, fromCol string, count int, toCol string) e
 		return err
 	}
 	if count < 1 {
-		return err
+		return ErrColumnNumber // ✅ Fix: return proper error instead of nil
 	}
 
 	lastFromCol := fromColNum + count - 1
@@ -979,11 +979,11 @@ func (f *File) MoveCols(sheet string, fromCol string, count int, toCol string) e
 
 	// Detect invalid overlap scenarios
 	if fromColNum < toColNum && toColNum <= lastFromCol {
-		return err
+		return newInvalidColumnMoveError(fromColNum, count, toColNum) // ✅ Fix: return proper error
 	}
 	lastToCol := toColNum + count - 1
 	if fromColNum > toColNum && fromColNum <= lastToCol {
-		return err
+		return newInvalidColumnMoveError(fromColNum, count, toColNum) // ✅ Fix: return proper error
 	}
 
 	// Step 1: Update ALL formulas
@@ -1011,17 +1011,22 @@ func (f *File) moveCellDataForCols(sheet string, fromCol, count, toCol int) erro
 	}
 
 	lastFromCol := fromCol + count - 1
-	lastToCol := toCol + count - 1
 
 	// Create a map of old column -> new column positions
 	colMapping := make(map[int]int)
 
 	if fromCol < toCol {
-		// Moving right
+		// Moving right: Move source columns to target position
+		// and shift intermediate columns left to fill the gap
+		// Example: Move B-C (2-3) to E (5)
+		// - Source B-C → positions 4-5 (where D-E were)
+		// - Intermediate D-E (4-5) → B-C positions (2-3)
+		// Result: A D E B C F
 		for i := 0; i < count; i++ {
-			colMapping[fromCol+i] = toCol + i
+			colMapping[fromCol+i] = toCol - count + 1 + i
 		}
-		for col := lastFromCol + 1; col <= lastToCol; col++ {
+		// Shift intermediate columns (from lastFromCol+1 to toCol) left by count positions
+		for col := lastFromCol + 1; col <= toCol; col++ {
 			colMapping[col] = col - count
 		}
 	} else {
@@ -1193,17 +1198,25 @@ func adjustColForColsMove(colStr string, fromCol, count, toCol int) string {
 	}
 
 	lastFromCol := fromCol + count - 1
-	lastToCol := toCol + count - 1
 
 	// If this column is in the source range being moved
 	if colNum >= fromCol && colNum <= lastFromCol {
+		// Moving right: source columns go to (toCol - count + 1) + offset
+		// Moving left: source columns go to toCol + offset
 		offset := colNum - fromCol
-		colName, _ := ColumnNumberToName(toCol + offset)
-		return colName
+		if fromCol < toCol {
+			// Right move: place source at intermediate position
+			colName, _ := ColumnNumberToName(toCol - count + 1 + offset)
+			return colName
+		} else {
+			// Left move: place source at toCol position
+			colName, _ := ColumnNumberToName(toCol + offset)
+			return colName
+		}
 	}
 
-	// If moving right: columns between lastFromCol+1 and lastToCol shift left
-	if fromCol < toCol && colNum > lastFromCol && colNum <= lastToCol {
+	// If moving right: columns between lastFromCol+1 and toCol shift left
+	if fromCol < toCol && colNum > lastFromCol && colNum <= toCol {
 		colName, _ := ColumnNumberToName(colNum - count)
 		return colName
 	}

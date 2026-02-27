@@ -354,3 +354,10 @@ func newUnzipSizeLimitError(unzipSizeLimit int64) error {
 func newViewIdxError(viewIndex int) error {
 	return fmt.Errorf("view index %d out of range", viewIndex)
 }
+
+// newInvalidColumnMoveError defined the error message on receiving overlapping
+// column ranges in MoveCols operation.
+func newInvalidColumnMoveError(fromCol, count, toCol int) error {
+	lastFromCol := fromCol + count - 1
+	return fmt.Errorf("invalid column move: source range [%d:%d] overlaps with target position %d", fromCol, lastFromCol, toCol)
+}
