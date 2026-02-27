@@ -978,13 +978,21 @@ func (f *File) MoveCols(sheet string, fromCol string, count int, toCol string) e
 	}
 
 	// Detect invalid overlap scenarios
+	// Only need to check when moving RIGHT
+	// When moving LEFT, there's no overlap issue because:
+	// - Source is on the right
+	// - Target is on the left
+	// - Columns in between shift right to fill the gap
+	// - Source and target never actually overlap
+
+	// Case: Moving right - target is within source range
+	// Example: Move B-C-D to C (target C is inside [B:D]) - INVALID
 	if fromColNum < toColNum && toColNum <= lastFromCol {
-		return newInvalidColumnMoveError(fromColNum, count, toColNum) // ✅ Fix: return proper error
+		return newInvalidColumnMoveError(fromColNum, count, toColNum)
 	}
-	lastToCol := toColNum + count - 1
-	if fromColNum > toColNum && fromColNum <= lastToCol {
-		return newInvalidColumnMoveError(fromColNum, count, toColNum) // ✅ Fix: return proper error
-	}
+
+	// No overlap check needed for left moves (fromColNum > toColNum)
+	// All left move scenarios are valid
 
 	// Step 1: Update ALL formulas
 	if err := f.updateAllFormulasForColsMove(sheet, fromColNum, count, toColNum); err != nil {

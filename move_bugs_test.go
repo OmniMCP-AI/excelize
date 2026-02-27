@@ -50,18 +50,24 @@ func TestMoveColsBug1_ErrorReturnsNil(t *testing.T) {
 		}
 	})
 
-	t.Run("overlap when moving left should return error", func(t *testing.T) {
+	t.Run("E-G to C is valid (adjacent, not overlap)", func(t *testing.T) {
 		// fromCol=E(5), count=3 → E-G (5-7)
 		// toCol=C(3)
 		// lastToCol = toCol + count - 1 = 3 + 3 - 1 = 5
-		// fromCol (5) is within [toCol, lastToCol] = [3, 5]
-		// This should be an overlap error
+		// lastToCol (5) == fromCol (5), just touching, not overlapping
+		// Result: A B E F G C D (valid move)
 		err := f.MoveCols("Sheet1", "E", 3, "C")
-		if err == nil {
-			t.Error("❌ BUG: Overlap (moving E-G to C) should return error, but got nil")
-			t.Log("This causes silent failure - no move happens but no error reported")
+		if err != nil {
+			t.Errorf("❌ FAIL: E-G to C should be allowed (adjacent): %v", err)
 		} else {
-			t.Logf("✅ PASS: Overlap correctly returns error: %v", err)
+			t.Log("✅ PASS: E-G to C is correctly allowed")
+
+			// Verify result
+			vals := make(map[string]string)
+			for _, col := range []string{"A", "B", "C", "D", "E", "F", "G"} {
+				vals[col], _ = f.GetCellValue("Sheet1", col+"1")
+			}
+			t.Logf("After move: %v", vals)
 		}
 	})
 }

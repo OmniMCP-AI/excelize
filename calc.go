@@ -899,6 +899,8 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 			f.calcCache.Store(cacheKey, val)
 			simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
 			f.calcCache.Store(simpleRef, newStringFormulaArg(val))
+			// Write result back to cell so GetCellValue can retrieve it
+			f.setFormulaValue(sheet, cell, val)
 			return val, nil
 		}
 	}
@@ -914,6 +916,8 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		// CRITICAL: Also cache error results to prevent redundant recalculation
 		simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
 		f.calcCache.Store(simpleRef, token)
+		// Write error result back to cell
+		f.setFormulaValue(sheet, cell, result)
 		return
 	}
 
@@ -932,6 +936,8 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 			result, err = f.formattedValue(&xlsxC{S: styleIdx, V: strings.ToUpper(strconv.FormatFloat(decimal, 'G', 15, 64))}, rawCellValue, CellTypeNumber)
 			if err == nil {
 				f.calcCache.Store(cacheKey, result)
+				// Write result back to cell
+				f.setFormulaValue(sheet, cell, result)
 			}
 			return
 		}
@@ -940,12 +946,16 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		}
 		if err == nil {
 			f.calcCache.Store(cacheKey, result)
+			// Write result back to cell
+			f.setFormulaValue(sheet, cell, result)
 		}
 		return
 	}
 	result, err = f.formattedValue(&xlsxC{S: styleIdx, V: token.Value()}, rawCellValue, CellTypeInlineString)
 	if err == nil {
 		f.calcCache.Store(cacheKey, result)
+		// Write result back to cell
+		f.setFormulaValue(sheet, cell, result)
 	}
 	return
 }
