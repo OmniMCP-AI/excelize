@@ -21,7 +21,6 @@ import (
 type xlsxWorksheet struct {
 	mu                     sync.RWMutex
 	formulaSI              sync.Map
-	colStyleCacheReady     sync.Once                    // ensures colStyleCache is initialized before concurrent use
 	colStyleCache          sync.Map                     // Cache for column styles: col -> styleID
 	XMLName                xml.Name                     `xml:"http://schemas.openxmlformats.org/spreadsheetml/2006/main worksheet"`
 	SheetPr                *xlsxSheetPr                 `xml:"sheetPr"`

@@ -919,8 +919,7 @@ func (f *File) copySheet(from, to int) error {
 	}
 	f.calcCache.Clear()
 	f.rangeCache.Clear()
-	worksheet := &xlsxWorksheet{}
-	deepcopy.Copy(worksheet, sheet)
+	worksheet := f.deepCopyWorksheet(sheet)
 	toSheetID := strconv.Itoa(f.getSheetID(f.GetSheetName(to)))
 	sheetXMLPath := "xl/worksheets/sheet" + toSheetID + ".xml"
 	if len(worksheet.SheetViews.SheetView) > 0 {

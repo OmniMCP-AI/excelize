@@ -239,7 +239,7 @@ func (f *File) deepCopyWorksheet(original *xlsxWorksheet) *xlsxWorksheet {
 		Dimension:              original.Dimension,
 		SheetViews:             original.SheetViews,
 		SheetFormatPr:          original.SheetFormatPr,
-		Cols:                   original.Cols,
+		Cols:                   nil, // deep copied below
 		SheetCalcPr:            original.SheetCalcPr,
 		SheetProtection:        original.SheetProtection,
 		ProtectedRanges:        original.ProtectedRanges,
@@ -306,6 +306,19 @@ func (f *File) deepCopyWorksheet(original *xlsxWorksheet) *xlsxWorksheet {
 				for j := 0; j < cellCount && j < len(original.SheetData.Row[i].C); j++ {
 					copy.SheetData.Row[i].C[j] = original.SheetData.Row[i].C[j]
 				}
+			}
+		}
+	}
+
+	// Deep copy Cols to avoid shared slice mutations (e.g. sort.Slice in mergeExpandedCols)
+	if original.Cols != nil {
+		copy.Cols = &xlsxCols{}
+		copy.Cols.Col = make([]xlsxCol, len(original.Cols.Col))
+		for i, c := range original.Cols.Col {
+			copy.Cols.Col[i] = c
+			if c.Width != nil {
+				w := *c.Width
+				copy.Cols.Col[i].Width = &w
 			}
 		}
 	}
