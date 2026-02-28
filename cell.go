@@ -1807,6 +1807,17 @@ func (ws *xlsxWorksheet) prepareCellStyle(col, row, style int) int {
 
 	// Priority 3: Column style with caching (optimized)
 	if ws.Cols != nil && len(ws.Cols.Col) > 0 {
+		// Ensure sync.Map internal structures are initialized before concurrent
+		// access. In Go 1.24+ sync.Map uses HashTrieMap which lazily allocates
+		// its root node on first operation. When multiple goroutines race to
+		// perform the first operation (e.g. workers in GetRangeDataConcurrent),
+		// the root pointer may not yet be visible, causing a nil dereference.
+		// sync.Once guarantees the Store/Delete pair runs exactly once and all
+		// subsequent operations see a fully initialized map.
+		ws.colStyleCacheReady.Do(func() {
+			ws.colStyleCache.Store(-1, 0)
+			ws.colStyleCache.Delete(-1)
+		})
 		// Check cache first
 		if cachedStyle, ok := ws.colStyleCache.Load(col); ok {
 			if styleID := cachedStyle.(int); styleID != 0 {
