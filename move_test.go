@@ -333,7 +333,8 @@ func TestMoveRows(t *testing.T) {
 
 	// Move rows 2,3,4 (count=3) to row 7
 	// Before: Row1, Row2, Row3, Row4, Row5, Row6, Row7, Row8, Row9, Row10
-	// After:  Row1, Row5, Row6, Row7, Row8, Row9, Row2, Row3, Row4, Row10
+	// After:  Row1, Row5, Row6, Row7, Row2, Row3, Row4, Row8, Row9, Row10
+	// (source rows 2-4 go to positions 5-7, intermediate rows 5-7 shift up to 2-4)
 	assert.NoError(t, f.MoveRows("Sheet1", 2, 3, 7))
 
 	// Verify data positions
@@ -350,28 +351,28 @@ func TestMoveRows(t *testing.T) {
 	assert.Equal(t, "Row7", val4, "Row7 should shift up to position 4")
 
 	val5, _ := f.GetCellValue("Sheet1", "A5")
-	assert.Equal(t, "Row8", val5, "Row8 should shift up to position 5")
+	assert.Equal(t, "Row2", val5, "Row2 should move to position 5")
 
 	val6, _ := f.GetCellValue("Sheet1", "A6")
-	assert.Equal(t, "Row9", val6, "Row9 should shift up to position 6")
+	assert.Equal(t, "Row3", val6, "Row3 should move to position 6")
 
 	val7, _ := f.GetCellValue("Sheet1", "A7")
-	assert.Equal(t, "Row2", val7, "Row2 should move to position 7")
+	assert.Equal(t, "Row4", val7, "Row4 should move to position 7")
 
 	val8, _ := f.GetCellValue("Sheet1", "A8")
-	assert.Equal(t, "Row3", val8, "Row3 should move to position 8")
+	assert.Equal(t, "Row8", val8, "Row8 should stay")
 
 	val9, _ := f.GetCellValue("Sheet1", "A9")
-	assert.Equal(t, "Row4", val9, "Row4 should move to position 9")
+	assert.Equal(t, "Row9", val9, "Row9 should stay")
 
 	val10, _ := f.GetCellValue("Sheet1", "A10")
 	assert.Equal(t, "Row10", val10, "Row10 should stay")
 
 	// Verify formulas updated
 	formula1, _ := f.GetCellFormula("Sheet1", "B1")
-	assert.Equal(t, "A7+A8+A9", formula1, "Formula should reference moved rows (now at 7,8,9)")
+	assert.Equal(t, "A5+A6+A7", formula1, "Formula should reference moved rows (now at 5,6,7)")
 
-	// Original B5 had formula "A7" and is now at B2 (row shifted up)
+	// Original B5 had formula "A7" and is now at B2 (row 5 shifted up to 2)
 	// And A7 shifted up to A4
 	formula2, _ := f.GetCellFormula("Sheet1", "B2")
 	assert.Equal(t, "A4", formula2, "Formula should shift with row and update reference")

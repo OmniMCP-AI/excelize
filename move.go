@@ -663,14 +663,16 @@ func (f *File) MoveRows(sheet string, fromRow, count, toRow int) error {
 	}
 
 	// Detect invalid overlap scenarios
+	// Only need to check when moving DOWN
+	// When moving UP, there's no overlap issue because:
+	// - Source is below
+	// - Target is above
+	// - Rows in between shift down to fill the gap
+	// - Source and target never actually overlap
+
+	// Case: Moving down - target is within source range
 	if fromRow < toRow && toRow <= lastFromRow {
-		// Moving down and destination is within source range
 		return newInvalidRowNumberError(toRow)
-	}
-	lastToRow := toRow + count - 1
-	if fromRow > toRow && fromRow <= lastToRow {
-		// Moving up and source overlaps with destination
-		return newInvalidRowNumberError(fromRow)
 	}
 
 	// Step 1: Update ALL formulas in ALL worksheets
@@ -698,18 +700,17 @@ func (f *File) moveCellDataForRows(sheet string, fromRow, count, toRow int) erro
 	}
 
 	lastFromRow := fromRow + count - 1
-	lastToRow := toRow + count - 1
 
 	// Create a map of old row -> new row positions
 	rowMapping := make(map[int]int)
 
 	if fromRow < toRow {
-		// Moving down: rows [fromRow, lastFromRow] move to [toRow, lastToRow]
-		// Rows between lastFromRow+1 and lastToRow shift up by count
+		// Moving down: Move source rows to target position
+		// and shift intermediate rows up to fill the gap
 		for i := 0; i < count; i++ {
-			rowMapping[fromRow+i] = toRow + i
+			rowMapping[fromRow+i] = toRow - count + 1 + i
 		}
-		for row := lastFromRow + 1; row <= lastToRow; row++ {
+		for row := lastFromRow + 1; row <= toRow; row++ {
 			rowMapping[row] = row - count
 		}
 	} else {
@@ -921,17 +922,19 @@ func adjustRowForRowsMove(rowStr string, fromRow, count, toRow int) string {
 	}
 
 	lastFromRow := fromRow + count - 1
-	lastToRow := toRow + count - 1
 
 	// If this row is in the source range being moved
 	if rowNum >= fromRow && rowNum <= lastFromRow {
 		offset := rowNum - fromRow
+		if fromRow < toRow {
+			return strconv.Itoa(toRow - count + 1 + offset)
+		}
 		return strconv.Itoa(toRow + offset)
 	}
 
 	// If moving down (fromRow < toRow):
-	// Rows between lastFromRow+1 and lastToRow shift up by count
-	if fromRow < toRow && rowNum > lastFromRow && rowNum <= lastToRow {
+	// Rows between lastFromRow+1 and toRow shift up by count
+	if fromRow < toRow && rowNum > lastFromRow && rowNum <= toRow {
 		return strconv.Itoa(rowNum - count)
 	}
 
