@@ -211,12 +211,17 @@ func (f *File) evalFormulaString(sheet, cell, formula string, worksheetCache *Wo
 	}
 
 	result, err := f.evalInfixExp(ctx, sheet, cell, tokens)
-	if err != nil {
-		return "", err
-	}
 
 	// Convert result to string - result is formulaArg with String/Number/etc fields
+	// CRITICAL: Even if err != nil, result may contain error value like "#DIV/0!"
+	// We should return the error value string so it can be displayed in Excel
 	resultStr := result.Value()
+
+	if err != nil {
+		// Return error value string (e.g., "#DIV/0!") along with error
+		// This allows calling code to write the error value back to the cell
+		return resultStr, err
+	}
 
 	// Cache the result
 	f.calcCache.Store(cacheKey, resultStr)

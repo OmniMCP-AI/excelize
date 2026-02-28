@@ -315,7 +315,9 @@ func (fa formulaArg) Value() (value string) {
 			return args[0].Value()
 		}
 	case ArgError:
-		return fa.Error
+		// CRITICAL: Return Excel error code (String field) instead of Go error message (Error field)
+		// This ensures error values display correctly in Excel as "#DIV/0!" not "division by zero"
+		return fa.String
 	}
 	return
 }
@@ -916,8 +918,7 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		// CRITICAL: Also cache error results to prevent redundant recalculation
 		simpleRef := fmt.Sprintf("%s!%s", sheet, cell)
 		f.calcCache.Store(simpleRef, token)
-		// Write error result back to cell
-		f.setFormulaValue(sheet, cell, result)
+		// NOTE: CalcCellValue is read-only - write-back happens in RecalculateAll/RecalculateAllWithDependency
 		return
 	}
 
@@ -936,8 +937,7 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 			result, err = f.formattedValue(&xlsxC{S: styleIdx, V: strings.ToUpper(strconv.FormatFloat(decimal, 'G', 15, 64))}, rawCellValue, CellTypeNumber)
 			if err == nil {
 				f.calcCache.Store(cacheKey, result)
-				// Write result back to cell
-				f.setFormulaValue(sheet, cell, result)
+				// NOTE: CalcCellValue is read-only - write-back happens in RecalculateAll/RecalculateAllWithDependency
 			}
 			return
 		}
@@ -946,16 +946,14 @@ func (f *File) CalcCellValue(sheet, cell string, opts ...Options) (result string
 		}
 		if err == nil {
 			f.calcCache.Store(cacheKey, result)
-			// Write result back to cell
-			f.setFormulaValue(sheet, cell, result)
+			// NOTE: CalcCellValue is read-only - write-back happens in RecalculateAll/RecalculateAllWithDependency
 		}
 		return
 	}
 	result, err = f.formattedValue(&xlsxC{S: styleIdx, V: token.Value()}, rawCellValue, CellTypeInlineString)
 	if err == nil {
 		f.calcCache.Store(cacheKey, result)
-		// Write result back to cell
-		f.setFormulaValue(sheet, cell, result)
+		// NOTE: CalcCellValue is read-only - write-back happens in RecalculateAll/RecalculateAllWithDependency
 	}
 	return
 }
@@ -2325,6 +2323,10 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 		if cached, ok := f.calcCache.Load(cacheKeyWithRaw); ok {
 			// CalcCellValue stores string, convert to formulaArg
 			if cachedStr, isString := cached.(string); isString {
+				// Check if it's an error value (starts with #)
+				if strings.HasPrefix(cachedStr, "#") {
+					return newErrorFormulaArg(cachedStr, cachedStr), nil
+				}
 				arg := newStringFormulaArg(cachedStr)
 				// Try to convert to number if applicable
 				if num := arg.ToNumber(); num.Type == ArgNumber {
@@ -2377,8 +2379,9 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 				ctx.iterationsCache[ref] = arg
 				ctx.mu.Unlock()
 
-				// 如果计算失败，回退到缓存值
-				if calcErr != nil || arg.Type == ArgError {
+				// CRITICAL: If result is ArgError, return it directly (error values are valid results)
+				// Only fallback to cached value if calculation truly failed (calcErr != nil AND no error value)
+				if calcErr != nil && arg.Type != ArgError {
 					if cachedValue, err := f.GetCellValue(sheet, cell, Options{RawCellValue: true}); err == nil && cachedValue != "" {
 						fallbackArg := newStringFormulaArg(cachedValue)
 						// 根据cell类型转换arg类型
@@ -2411,6 +2414,9 @@ func (f *File) cellResolver(ctx *calcContext, sheet, cell string) (formulaArg, e
 	switch cellType {
 	case CellTypeBool:
 		return arg.ToBool(), err
+	case CellTypeError:
+		// Error values like #DIV/0!, #NUM!, #VALUE!, etc.
+		return newErrorFormulaArg(value, value), err
 	case CellTypeNumber, CellTypeUnset:
 		if arg.Value() == "" {
 			return newEmptyFormulaArg(), err

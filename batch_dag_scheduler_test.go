@@ -124,7 +124,7 @@ func TestInferFormulaAndXMLTypes(t *testing.T) {
 	check("", ArgString)
 	check("42", ArgNumber)
 	check("TRUE", ArgNumber) // booleans are stored as number with Boolean flag
-	check("#N/A", ArgString)
+	check("#N/A", ArgError)  // Error values should be ArgError, not ArgString
 
 	if inferXMLCellType("") != "" {
 		t.Fatalf("empty string should keep default type")

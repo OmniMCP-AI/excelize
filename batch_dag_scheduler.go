@@ -301,16 +301,19 @@ func (scheduler *DAGScheduler) executeFormula(cell string) {
 
 	value, err := scheduler.f.CalcCellValueWithSubExprCache(sheet, cellName, formula, scheduler.subExprCache, scheduler.worksheetCache, opts)
 
-	if err != nil {
+	// CRITICAL: Even if err != nil, value may contain error string like "#DIV/0!"
+	// We should still store and write back error values so they display in Excel
+	if err != nil && value == "" {
+		// True error case: calculation failed without producing error value
 		scheduler.notifyDependents(cell)
 		scheduler.markFormulaDone()
 		return
 	}
 
-	// 保存结果
+	// 保存结果 (包括错误值)
 	scheduler.results.Store(cell, value)
 
-	// 写回缓存和 worksheet
+	// 写回缓存和 worksheet (包括错误值)
 	scheduler.f.storeCalculatedValue(sheet, cellName, value, scheduler.worksheetCache)
 
 	// 通知依赖此公式的其他公式
@@ -394,6 +397,11 @@ func inferFormulaResultType(value string) formulaArg {
 	// 空字符串：返回字符串类型（很多公式用 "" 表示空值）
 	if value == "" {
 		return newStringFormulaArg("")
+	}
+
+	// 检查错误值（以 # 开头）
+	if strings.HasPrefix(value, "#") {
+		return newErrorFormulaArg(value, value)
 	}
 
 	// 尝试解析为数字

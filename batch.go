@@ -612,10 +612,14 @@ func (f *File) RecalculateAll() error {
 		calcTime += calcDuration
 
 		if err != nil {
-			// If calculation fails, clear the cache
-			cellRef.V = ""
-			cellRef.T = ""
-			continue
+			// CRITICAL: Even if err != nil, result may contain error value like "#DIV/0!"
+			// Only clear if result is truly empty (calculation completely failed)
+			if result == "" {
+				cellRef.V = ""
+				cellRef.T = ""
+				continue
+			}
+			// Fall through to write error value (e.g., "#DIV/0!", "#NUM!", etc.)
 		}
 
 		// Update cache value directly (we already have the cell reference)
@@ -625,6 +629,9 @@ func (f *File) RecalculateAll() error {
 			cellRef.T = ""
 		} else if result == "TRUE" || result == "FALSE" {
 			cellRef.T = "b"
+		} else if strings.HasPrefix(result, "#") {
+			// Error values like #DIV/0!, #NUM!, #VALUE!, etc.
+			cellRef.T = "e"
 		} else {
 			// Try to parse as number
 			if _, err := strconv.ParseFloat(result, 64); err == nil {

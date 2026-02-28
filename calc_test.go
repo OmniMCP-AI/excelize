@@ -2295,16 +2295,16 @@ func TestCalcCellValue(t *testing.T) {
 	}
 	mathCalcError := map[string][]string{
 		"1/0":        {"#DIV/0!", "#DIV/0!"},
-		"1^\"text\"": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"\"text\"^1": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"1+\"text\"": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"\"text\"+1": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"1-\"text\"": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"\"text\"-1": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"1*\"text\"": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"\"text\"*1": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"1/\"text\"": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
-		"\"text\"/1": {"#VALUE!", "strconv.ParseFloat: parsing \"text\": invalid syntax"},
+		"1^\"text\"": {"#VALUE!", "#VALUE!"},
+		"\"text\"^1": {"#VALUE!", "#VALUE!"},
+		"1+\"text\"": {"#VALUE!", "#VALUE!"},
+		"\"text\"+1": {"#VALUE!", "#VALUE!"},
+		"1-\"text\"": {"#VALUE!", "#VALUE!"},
+		"\"text\"-1": {"#VALUE!", "#VALUE!"},
+		"1*\"text\"": {"#VALUE!", "#VALUE!"},
+		"\"text\"*1": {"#VALUE!", "#VALUE!"},
+		"1/\"text\"": {"#VALUE!", "#VALUE!"},
+		"\"text\"/1": {"#VALUE!", "#VALUE!"},
 		// Engineering Functions
 		// BESSELI
 		"BESSELI()":       {"#VALUE!", "BESSELI requires 2 numeric arguments"},
@@ -4906,7 +4906,9 @@ func TestCalcANCHORARRAY(t *testing.T) {
 	argsList := list.New()
 	argsList.PushBack(newStringFormulaArg("$B$1"))
 	formulaArg := fn.ANCHORARRAY(argsList)
-	assert.Equal(t, "sheet SheetN does not exist", formulaArg.Value())
+	// After fix, Value() returns Excel error code (#VALUE!), not Go error message
+	assert.Equal(t, "#VALUE!", formulaArg.Value())
+	assert.Equal(t, "sheet SheetN does not exist", formulaArg.Error)
 
 	fn.sheet = "Sheet1"
 	argsList = argsList.Init()
@@ -4922,7 +4924,9 @@ func TestCalcANCHORARRAY(t *testing.T) {
 	ws.(*xlsxWorksheet).SheetData.Row[0].C[0].F = &xlsxF{}
 	formulaArg = fn.ANCHORARRAY(argsList)
 	assert.Equal(t, ArgError, formulaArg.Type)
-	assert.Equal(t, ErrParameterInvalid.Error(), formulaArg.Value())
+	// After fix, Value() returns Excel error code (#VALUE!), not Go error message
+	assert.Equal(t, "#VALUE!", formulaArg.Value())
+	assert.Equal(t, ErrParameterInvalid.Error(), formulaArg.Error)
 
 	argsList = argsList.Init()
 	arg = newStringFormulaArg("$B$1")
@@ -4932,7 +4936,9 @@ func TestCalcANCHORARRAY(t *testing.T) {
 	ws.(*xlsxWorksheet).SheetData.Row[0].C[0].F = &xlsxF{Ref: "A1:A1"}
 	formulaArg = fn.ANCHORARRAY(argsList)
 	assert.Equal(t, ArgError, formulaArg.Type)
-	assert.Equal(t, "sheet SheetN does not exist", formulaArg.Value())
+	// After fix, Value() returns Excel error code (#VALUE!), not Go error message
+	assert.Equal(t, "#VALUE!", formulaArg.Value())
+	assert.Equal(t, "sheet SheetN does not exist", formulaArg.Error)
 }
 
 func TestCalcArrayFormula(t *testing.T) {
