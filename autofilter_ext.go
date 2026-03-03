@@ -19,6 +19,7 @@ type AutoFilterColumnResult struct {
 	Filters       *FiltersResult
 	CustomFilters *CustomFiltersResult
 	ColorFilter   *ColorFilterResult
+	ColorFilters  *ColorFiltersResult
 }
 
 // FiltersResult holds value-list filter criteria.
@@ -43,6 +44,11 @@ type CustomFilterItemResult struct {
 type ColorFilterResult struct {
 	CellColor bool
 	DxfID     int
+}
+
+// ColorFiltersResult holds Univer-style color filter criteria (direct color values).
+type ColorFiltersResult struct {
+	CellFillColors []string
 }
 
 // rowOnlyRefPattern matches row-only references like "1:5", "1:1048576".
