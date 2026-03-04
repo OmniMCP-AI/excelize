@@ -12,8 +12,11 @@
 package excelize
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -1312,6 +1315,561 @@ func (f *File) DeleteChart(sheet, cell string) error {
 	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
 	_, err = f.deleteDrawing(col, row, drawingXML, "Chart")
 	return err
+}
+
+// GetChart provides a function to get chart configuration in a spreadsheet by
+// given worksheet name and cell reference. The returned []*Chart slice
+// contains the primary chart and any combo charts.
+func (f *File) GetChart(sheet, cell string) ([]*Chart, error) {
+	col, row, err := CellNameToCoordinates(cell)
+	if err != nil {
+		return nil, err
+	}
+	col--
+	row--
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return nil, err
+	}
+	if ws.Drawing == nil {
+		return nil, nil
+	}
+	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return nil, err
+	}
+	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
+	return f.getChartFromDrawing(wsDr, drawingRelPath, col, row)
+}
+
+// getChartFromDrawing extracts chart configuration from drawing anchors at the
+// specified cell position.
+func (f *File) getChartFromDrawing(wsDr *xlsxWsDr, drawingRelPath string, col, row int) ([]*Chart, error) {
+	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
+		for _, anchor := range anchors {
+			if anchor.From == nil || anchor.From.Col != col || anchor.From.Row != row {
+				continue
+			}
+			if anchor.Pic != nil {
+				continue
+			}
+			chartRID := f.extractChartRID(anchor.GraphicFrame)
+			if chartRID == "" {
+				continue
+			}
+			rel := f.getDrawingRelationships(drawingRelPath, chartRID)
+			if rel == nil {
+				continue
+			}
+			chartPath := filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
+			chartSpaceBytes := f.readXML(chartPath)
+			if len(chartSpaceBytes) == 0 {
+				continue
+			}
+			normalizedBytes := namespaceStrictToTransitional(chartSpaceBytes)
+			var chartSpace xlsxChartSpace
+			if err := f.xmlNewDecoder(bytes.NewReader(normalizedBytes)).
+				Decode(&chartSpace); err != nil && err != io.EOF {
+				return nil, err
+			}
+			return f.extractCharts(&chartSpace, normalizedBytes), nil
+		}
+	}
+	return nil, nil
+}
+
+// extractChartRID extracts the chart relationship ID from the graphic frame
+// inner XML content by searching for the c:chart element's r:id attribute.
+func (f *File) extractChartRID(graphicFrame string) string {
+	decoder := f.xmlNewDecoder(strings.NewReader(graphicFrame))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return ""
+		}
+		startElement, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if startElement.Name.Local == "chart" {
+			for _, attr := range startElement.Attr {
+				if attr.Name.Local == "id" {
+					return attr.Value
+				}
+			}
+		}
+	}
+}
+
+// extractCharts converts an xlsxChartSpace into a []*Chart slice. The first
+// element is the primary chart and subsequent elements are combo charts. The
+// rawXML parameter is used for token-based title extraction.
+func (f *File) extractCharts(cs *xlsxChartSpace, rawXML []byte) []*Chart {
+	if cs == nil || cs.Chart.PlotArea == nil {
+		return nil
+	}
+	plotArea := cs.Chart.PlotArea
+	chartInfos := identifyChartTypes(plotArea)
+	if len(chartInfos) == 0 {
+		return nil
+	}
+	var charts []*Chart
+	for _, info := range chartInfos {
+		chart := &Chart{
+			Type:   info.chartType,
+			Series: extractChartSeries(info.charts),
+		}
+		f.extractChartTitle(rawXML, chart)
+		extractChartLegend(cs.Chart.Legend, chart)
+		extractChartPlotArea(info.charts, chart)
+		if info.charts.VaryColors != nil {
+			chart.VaryColors = info.charts.VaryColors.Val
+		}
+		if info.charts.HoleSize != nil && info.charts.HoleSize.Val != nil {
+			chart.HoleSize = *info.charts.HoleSize.Val
+		}
+		if info.charts.GapWidth != nil && info.charts.GapWidth.Val != nil {
+			gw := uint(*info.charts.GapWidth.Val)
+			chart.GapWidth = &gw
+		}
+		if info.charts.Overlap != nil && info.charts.Overlap.Val != nil {
+			ov := *info.charts.Overlap.Val
+			chart.Overlap = &ov
+		}
+		if cs.Chart.DispBlanksAs != nil && cs.Chart.DispBlanksAs.Val != nil {
+			chart.ShowBlanksAs = *cs.Chart.DispBlanksAs.Val
+		}
+		charts = append(charts, chart)
+	}
+	// Only the first chart gets the title
+	if len(charts) > 1 {
+		for i := 1; i < len(charts); i++ {
+			charts[i].Title = nil
+		}
+	}
+	return charts
+}
+
+// chartTypeInfo holds the chart type and associated chart data for a single
+// chart element within a plot area.
+type chartTypeInfo struct {
+	chartType ChartType
+	charts    *cCharts
+}
+
+// identifyChartTypes examines the plot area and returns all chart types found,
+// supporting combo charts (multiple chart types in one plot area).
+func identifyChartTypes(plotArea *cPlotArea) []chartTypeInfo {
+	var result []chartTypeInfo
+	for _, c := range plotArea.AreaChart {
+		result = append(result, chartTypeInfo{identifyAreaChartType(c), c})
+	}
+	for _, c := range plotArea.Area3DChart {
+		result = append(result, chartTypeInfo{identifyArea3DChartType(c), c})
+	}
+	for _, c := range plotArea.BarChart {
+		result = append(result, chartTypeInfo{identifyBarChartType(c), c})
+	}
+	for _, c := range plotArea.Bar3DChart {
+		result = append(result, chartTypeInfo{identifyBar3DChartType(c), c})
+	}
+	for _, c := range plotArea.LineChart {
+		result = append(result, chartTypeInfo{Line, c})
+	}
+	for _, c := range plotArea.Line3DChart {
+		result = append(result, chartTypeInfo{Line3D, c})
+	}
+	for _, c := range plotArea.PieChart {
+		result = append(result, chartTypeInfo{Pie, c})
+	}
+	for _, c := range plotArea.Pie3DChart {
+		result = append(result, chartTypeInfo{Pie3D, c})
+	}
+	for _, c := range plotArea.DoughnutChart {
+		result = append(result, chartTypeInfo{Doughnut, c})
+	}
+	for _, c := range plotArea.OfPieChart {
+		result = append(result, chartTypeInfo{identifyOfPieChartType(c), c})
+	}
+	for _, c := range plotArea.RadarChart {
+		result = append(result, chartTypeInfo{Radar, c})
+	}
+	for _, c := range plotArea.ScatterChart {
+		result = append(result, chartTypeInfo{Scatter, c})
+	}
+	for _, c := range plotArea.Surface3DChart {
+		result = append(result, chartTypeInfo{identifySurface3DChartType(c), c})
+	}
+	for _, c := range plotArea.SurfaceChart {
+		result = append(result, chartTypeInfo{identifySurfaceChartType(c), c})
+	}
+	for _, c := range plotArea.BubbleChart {
+		result = append(result, chartTypeInfo{identifyBubbleChartType(c), c})
+	}
+	for _, c := range plotArea.StockChart {
+		result = append(result, chartTypeInfo{identifyStockChartType(c), c})
+	}
+	return result
+}
+
+// identifyAreaChartType returns the ChartType for an area chart based on its
+// grouping attribute.
+func identifyAreaChartType(c *cCharts) ChartType {
+	grouping := getGrouping(c)
+	switch grouping {
+	case "stacked":
+		return AreaStacked
+	case "percentStacked":
+		return AreaPercentStacked
+	default:
+		return Area
+	}
+}
+
+// identifyArea3DChartType returns the ChartType for a 3D area chart based on
+// its grouping attribute.
+func identifyArea3DChartType(c *cCharts) ChartType {
+	grouping := getGrouping(c)
+	switch grouping {
+	case "stacked":
+		return Area3DStacked
+	case "percentStacked":
+		return Area3DPercentStacked
+	default:
+		return Area3D
+	}
+}
+
+// identifyBarChartType returns the ChartType for a bar/column chart based on
+// its barDir and grouping attributes.
+func identifyBarChartType(c *cCharts) ChartType {
+	barDir := getBarDir(c)
+	grouping := getGrouping(c)
+	if barDir == "bar" {
+		switch grouping {
+		case "stacked":
+			return BarStacked
+		case "percentStacked":
+			return BarPercentStacked
+		default:
+			return Bar
+		}
+	}
+	// col
+	switch grouping {
+	case "stacked":
+		return ColStacked
+	case "percentStacked":
+		return ColPercentStacked
+	default:
+		return Col
+	}
+}
+
+// identifyBar3DChartType returns the ChartType for a 3D bar/column chart based
+// on its barDir, grouping and shape attributes.
+func identifyBar3DChartType(c *cCharts) ChartType {
+	barDir := getBarDir(c)
+	grouping := getGrouping(c)
+	shape := getShape(c)
+	if barDir == "bar" {
+		return identifyBar3DType(grouping, shape)
+	}
+	return identifyCol3DType(grouping, shape)
+}
+
+// identifyBar3DType returns the 3D bar chart type from grouping and shape.
+func identifyBar3DType(grouping, shape string) ChartType {
+	switch shape {
+	case "cone":
+		switch grouping {
+		case "stacked":
+			return Bar3DConeStacked
+		case "percentStacked":
+			return Bar3DConePercentStacked
+		default:
+			return Bar3DConeClustered
+		}
+	case "pyramid":
+		switch grouping {
+		case "stacked":
+			return Bar3DPyramidStacked
+		case "percentStacked":
+			return Bar3DPyramidPercentStacked
+		default:
+			return Bar3DPyramidClustered
+		}
+	case "cylinder":
+		switch grouping {
+		case "stacked":
+			return Bar3DCylinderStacked
+		case "percentStacked":
+			return Bar3DCylinderPercentStacked
+		default:
+			return Bar3DCylinderClustered
+		}
+	default:
+		switch grouping {
+		case "stacked":
+			return Bar3DStacked
+		case "percentStacked":
+			return Bar3DPercentStacked
+		default:
+			return Bar3DClustered
+		}
+	}
+}
+
+// identifyCol3DType returns the 3D column chart type from grouping and shape.
+func identifyCol3DType(grouping, shape string) ChartType {
+	switch shape {
+	case "cone":
+		switch grouping {
+		case "stacked":
+			return Col3DConeStacked
+		case "percentStacked":
+			return Col3DConePercentStacked
+		case "clustered":
+			return Col3DConeClustered
+		default:
+			return Col3DCone
+		}
+	case "pyramid":
+		switch grouping {
+		case "stacked":
+			return Col3DPyramidStacked
+		case "percentStacked":
+			return Col3DPyramidPercentStacked
+		case "clustered":
+			return Col3DPyramidClustered
+		default:
+			return Col3DPyramid
+		}
+	case "cylinder":
+		switch grouping {
+		case "stacked":
+			return Col3DCylinderStacked
+		case "percentStacked":
+			return Col3DCylinderPercentStacked
+		case "clustered":
+			return Col3DCylinderClustered
+		default:
+			return Col3DCylinder
+		}
+	default:
+		switch grouping {
+		case "stacked":
+			return Col3DStacked
+		case "percentStacked":
+			return Col3DPercentStacked
+		case "clustered":
+			return Col3DClustered
+		default:
+			return Col3D
+		}
+	}
+}
+
+// identifyOfPieChartType returns PieOfPie or BarOfPie based on the ofPieType
+// attribute.
+func identifyOfPieChartType(c *cCharts) ChartType {
+	if c.OfPieType != nil && c.OfPieType.Val != nil && *c.OfPieType.Val == "bar" {
+		return BarOfPie
+	}
+	return PieOfPie
+}
+
+// identifySurface3DChartType returns Surface3D or WireframeSurface3D based on
+// the wireframe attribute.
+func identifySurface3DChartType(c *cCharts) ChartType {
+	if c.Wireframe != nil && c.Wireframe.Val != nil && *c.Wireframe.Val {
+		return WireframeSurface3D
+	}
+	return Surface3D
+}
+
+// identifySurfaceChartType returns Contour or WireframeContour based on the
+// wireframe attribute.
+func identifySurfaceChartType(c *cCharts) ChartType {
+	if c.Wireframe != nil && c.Wireframe.Val != nil && *c.Wireframe.Val {
+		return WireframeContour
+	}
+	return Contour
+}
+
+// identifyBubbleChartType returns Bubble or Bubble3D based on the series
+// Bubble3D attribute.
+func identifyBubbleChartType(c *cCharts) ChartType {
+	if c.Ser != nil {
+		for _, ser := range *c.Ser {
+			if ser.Bubble3D != nil && ser.Bubble3D.Val != nil && *ser.Bubble3D.Val {
+				return Bubble3D
+			}
+		}
+	}
+	return Bubble
+}
+
+// identifyStockChartType returns StockHighLowClose or StockOpenHighLowClose
+// based on the upDownBars attribute.
+func identifyStockChartType(c *cCharts) ChartType {
+	if c.UpDownBars != nil {
+		return StockOpenHighLowClose
+	}
+	return StockHighLowClose
+}
+
+// getGrouping returns the grouping value from a cCharts element.
+func getGrouping(c *cCharts) string {
+	if c.Grouping != nil && c.Grouping.Val != nil {
+		return *c.Grouping.Val
+	}
+	return "standard"
+}
+
+// getBarDir returns the bar direction from a cCharts element.
+func getBarDir(c *cCharts) string {
+	if c.BarDir != nil && c.BarDir.Val != nil {
+		return *c.BarDir.Val
+	}
+	return "col"
+}
+
+// getShape returns the shape value from a cCharts element.
+func getShape(c *cCharts) string {
+	if c.Shape != nil && c.Shape.Val != nil {
+		return *c.Shape.Val
+	}
+	return ""
+}
+
+// extractChartSeries extracts chart series data from the cCharts element.
+func extractChartSeries(c *cCharts) []ChartSeries {
+	if c.Ser == nil {
+		return nil
+	}
+	var series []ChartSeries
+	for _, ser := range *c.Ser {
+		s := ChartSeries{}
+		if ser.Tx != nil && ser.Tx.StrRef != nil {
+			s.Name = ser.Tx.StrRef.F
+		}
+		if ser.Cat != nil && ser.Cat.StrRef != nil {
+			s.Categories = ser.Cat.StrRef.F
+		}
+		if ser.Val != nil && ser.Val.NumRef != nil {
+			s.Values = ser.Val.NumRef.F
+		}
+		if ser.XVal != nil && ser.XVal.StrRef != nil {
+			s.Categories = ser.XVal.StrRef.F
+		}
+		if ser.YVal != nil && ser.YVal.NumRef != nil {
+			s.Values = ser.YVal.NumRef.F
+		}
+		if ser.BubbleSize != nil && ser.BubbleSize.NumRef != nil {
+			s.Sizes = ser.BubbleSize.NumRef.F
+		}
+		series = append(series, s)
+	}
+	return series
+}
+
+// extractChartTitle extracts the chart title text from the raw chart XML bytes
+// and sets it on the Chart. It uses token-based parsing to handle the a:
+// namespace prefix correctly.
+func (f *File) extractChartTitle(chartXML []byte, chart *Chart) {
+	decoder := f.xmlNewDecoder(bytes.NewReader(chartXML))
+	var inTitle, inTx, inRich, inR bool
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "title":
+				inTitle = true
+			case "tx":
+				if inTitle {
+					inTx = true
+				}
+			case "rich":
+				if inTx {
+					inRich = true
+				}
+			case "r":
+				if inRich {
+					inR = true
+				}
+			case "t":
+				if inR {
+					var text string
+					if err := decoder.DecodeElement(&text, &t); err == nil && text != "" {
+						chart.Title = append(chart.Title, RichTextRun{Text: text})
+					}
+				}
+			}
+		case xml.EndElement:
+			switch t.Name.Local {
+			case "title":
+				return
+			case "tx":
+				inTx = false
+			case "rich":
+				inRich = false
+			case "r":
+				inR = false
+			}
+		}
+	}
+}
+
+// extractChartLegend extracts the legend settings from the cLegend element and
+// sets them on the Chart.
+func extractChartLegend(legend *cLegend, chart *Chart) {
+	if legend == nil {
+		chart.Legend.Position = "none"
+		return
+	}
+	if legend.LegendPos != nil && legend.LegendPos.Val != nil {
+		for name, val := range chartLegendPosition {
+			if val == *legend.LegendPos.Val {
+				chart.Legend.Position = name
+				break
+			}
+		}
+	}
+	if legend.Overlay != nil && legend.Overlay.Val != nil {
+		chart.Legend.ShowLegendKey = *legend.Overlay.Val
+	}
+}
+
+// extractChartPlotArea extracts the plot area settings from the cCharts
+// element and sets them on the Chart.
+func extractChartPlotArea(c *cCharts, chart *Chart) {
+	if c.DLbls == nil {
+		return
+	}
+	if c.DLbls.ShowVal != nil && c.DLbls.ShowVal.Val != nil {
+		chart.PlotArea.ShowVal = *c.DLbls.ShowVal.Val
+	}
+	if c.DLbls.ShowCatName != nil && c.DLbls.ShowCatName.Val != nil {
+		chart.PlotArea.ShowCatName = *c.DLbls.ShowCatName.Val
+	}
+	if c.DLbls.ShowSerName != nil && c.DLbls.ShowSerName.Val != nil {
+		chart.PlotArea.ShowSerName = *c.DLbls.ShowSerName.Val
+	}
+	if c.DLbls.ShowPercent != nil && c.DLbls.ShowPercent.Val != nil {
+		chart.PlotArea.ShowPercent = *c.DLbls.ShowPercent.Val
+	}
+	if c.DLbls.ShowBubbleSize != nil && c.DLbls.ShowBubbleSize.Val != nil {
+		chart.PlotArea.ShowBubbleSize = *c.DLbls.ShowBubbleSize.Val
+	}
+	if c.DLbls.ShowLeaderLines != nil && c.DLbls.ShowLeaderLines.Val != nil {
+		chart.PlotArea.ShowLeaderLines = *c.DLbls.ShowLeaderLines.Val
+	}
 }
 
 // countCharts provides a function to get chart files count storage in the

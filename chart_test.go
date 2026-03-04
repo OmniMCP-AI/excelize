@@ -635,3 +635,231 @@ func TestChartWithLogarithmicBase(t *testing.T) {
 		}
 	}
 }
+
+func TestGetChart(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+		{Name: "Sheet1!$A$4", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$4:$D$4"},
+	}
+
+	// Test get chart with various types
+	for _, tc := range []struct {
+		cell      string
+		chartType ChartType
+		title     string
+	}{
+		{"E1", Col, "Column Chart"},
+		{"M1", Bar, "Bar Chart"},
+		{"E16", Line, "Line Chart"},
+		{"M16", Pie, "Pie Chart"},
+		{"E32", Area, "Area Chart"},
+		{"M32", Radar, "Radar Chart"},
+		{"E48", Scatter, "Scatter Chart"},
+		{"M48", Doughnut, "Doughnut Chart"},
+	} {
+		assert.NoError(t, f.AddChart(sheet, tc.cell, &Chart{
+			Type:   tc.chartType,
+			Series: series,
+			Title:  []RichTextRun{{Text: tc.title}},
+		}))
+		charts, err := f.GetChart(sheet, tc.cell)
+		assert.NoError(t, err)
+		assert.NotNil(t, charts, tc.title)
+		assert.Len(t, charts, 1, tc.title)
+		assert.Equal(t, tc.chartType, charts[0].Type, tc.title)
+		assert.Len(t, charts[0].Series, 3, tc.title)
+		assert.Equal(t, "Sheet1!$A$2", charts[0].Series[0].Name, tc.title)
+		assert.Equal(t, "Sheet1!$B$1:$D$1", charts[0].Series[0].Categories, tc.title)
+		assert.Equal(t, "Sheet1!$B$2:$D$2", charts[0].Series[0].Values, tc.title)
+		assert.Len(t, charts[0].Title, 1, tc.title)
+		assert.Equal(t, tc.title, charts[0].Title[0].Text, tc.title)
+	}
+
+	// Test get chart with 3D types
+	for _, tc := range []struct {
+		cell      string
+		chartType ChartType
+	}{
+		{"A64", Col3DClustered},
+		{"J64", Bar3DClustered},
+		{"A80", Pie3D},
+		{"J80", Area3D},
+		{"A96", Line3D},
+	} {
+		assert.NoError(t, f.AddChart(sheet, tc.cell, &Chart{
+			Type:   tc.chartType,
+			Series: series,
+			Title:  []RichTextRun{{Text: "3D Chart"}},
+		}))
+		charts, err := f.GetChart(sheet, tc.cell)
+		assert.NoError(t, err)
+		assert.NotNil(t, charts)
+		assert.Len(t, charts, 1)
+		assert.Equal(t, tc.chartType, charts[0].Type)
+	}
+
+	// Test get chart with 3D bar shapes
+	for _, tc := range []struct {
+		cell      string
+		chartType ChartType
+	}{
+		{"A112", Bar3DConeClustered},
+		{"J112", Bar3DPyramidClustered},
+		{"A128", Bar3DCylinderClustered},
+		{"J128", Col3DCone},
+		{"A144", Col3DPyramid},
+		{"J144", Col3DCylinder},
+	} {
+		assert.NoError(t, f.AddChart(sheet, tc.cell, &Chart{
+			Type:   tc.chartType,
+			Series: series,
+		}))
+		charts, err := f.GetChart(sheet, tc.cell)
+		assert.NoError(t, err)
+		assert.NotNil(t, charts)
+		assert.Len(t, charts, 1)
+		assert.Equal(t, tc.chartType, charts[0].Type)
+	}
+
+	// Test get combo chart
+	assert.NoError(t, f.AddChart(sheet, "A160", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Combo Chart"}},
+	}, &Chart{
+		Type:   Line,
+		Series: series,
+	}))
+	charts, err := f.GetChart(sheet, "A160")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 2)
+	assert.Equal(t, Col, charts[0].Type)
+	assert.Equal(t, Line, charts[1].Type)
+	assert.Len(t, charts[0].Title, 1)
+	assert.Equal(t, "Combo Chart", charts[0].Title[0].Text)
+	assert.Nil(t, charts[1].Title)
+
+	// Test get chart with plot area options
+	assert.NoError(t, f.AddChart(sheet, "A176", &Chart{
+		Type:   Col,
+		Series: series,
+		PlotArea: ChartPlotArea{
+			ShowVal:     true,
+			ShowCatName: true,
+			ShowSerName: true,
+		},
+	}))
+	charts, err = f.GetChart(sheet, "A176")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.True(t, charts[0].PlotArea.ShowVal)
+	assert.True(t, charts[0].PlotArea.ShowCatName)
+	assert.True(t, charts[0].PlotArea.ShowSerName)
+
+	// Test get chart on no chart cell
+	charts, err = f.GetChart(sheet, "Z1")
+	assert.NoError(t, err)
+	assert.Nil(t, charts)
+
+	// Test get chart on no drawing worksheet
+	charts, err = f.GetChart(sheet, "Z1")
+	assert.NoError(t, err)
+	assert.Nil(t, charts)
+
+	// Test get chart with Surface and Contour types
+	assert.NoError(t, f.AddChart(sheet, "A192", &Chart{
+		Type:   Surface3D,
+		Series: series,
+	}))
+	charts, err = f.GetChart(sheet, "A192")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Equal(t, Surface3D, charts[0].Type)
+
+	assert.NoError(t, f.AddChart(sheet, "J192", &Chart{
+		Type:   WireframeSurface3D,
+		Series: series,
+	}))
+	charts, err = f.GetChart(sheet, "J192")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Equal(t, WireframeSurface3D, charts[0].Type)
+
+	// Test get chart with legend position
+	assert.NoError(t, f.AddChart(sheet, "A208", &Chart{
+		Type:   Col,
+		Series: series,
+		Legend: ChartLegend{Position: "top"},
+	}))
+	charts, err = f.GetChart(sheet, "A208")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Equal(t, "top", charts[0].Legend.Position)
+
+	// Test get chart with no legend
+	assert.NoError(t, f.AddChart(sheet, "J208", &Chart{
+		Type:   Col,
+		Series: series,
+		Legend: ChartLegend{Position: "none"},
+	}))
+	charts, err = f.GetChart(sheet, "J208")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Equal(t, "none", charts[0].Legend.Position)
+
+	// Test get chart with stacked and percent stacked types
+	for _, tc := range []struct {
+		cell      string
+		chartType ChartType
+	}{
+		{"A224", BarStacked},
+		{"J224", BarPercentStacked},
+		{"A240", ColStacked},
+		{"J240", ColPercentStacked},
+		{"A256", AreaStacked},
+		{"J256", AreaPercentStacked},
+	} {
+		assert.NoError(t, f.AddChart(sheet, tc.cell, &Chart{
+			Type:   tc.chartType,
+			Series: series,
+		}))
+		charts, err = f.GetChart(sheet, tc.cell)
+		assert.NoError(t, err)
+		assert.NotNil(t, charts)
+		assert.Equal(t, tc.chartType, charts[0].Type)
+	}
+
+	// Test error cases
+	// Invalid sheet name
+	_, err = f.GetChart("Sheet:1", "A1")
+	assert.EqualError(t, err, ErrSheetNameInvalid.Error())
+	// Non-existent sheet
+	_, err = f.GetChart("SheetN", "A1")
+	assert.EqualError(t, err, "sheet SheetN does not exist")
+	// Invalid cell reference
+	_, err = f.GetChart(sheet, "")
+	assert.EqualError(t, err, newCellNameToCoordinatesError("", newInvalidCellNameError("")).Error())
+	// No drawing on sheet
+	f2 := NewFile()
+	charts, err = f2.GetChart("Sheet1", "A1")
+	assert.NoError(t, err)
+	assert.Nil(t, charts)
+	assert.NoError(t, f2.Close())
+
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestGetChart.xlsx")))
+	assert.NoError(t, f.Close())
+}
