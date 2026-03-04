@@ -481,6 +481,41 @@ func TestAdjustColDimensions(t *testing.T) {
 	assert.NoError(t, f.SetCellFormula("Sheet1", "C3", "A1+B1"))
 	assert.Equal(t, ErrColumnNumber, f.adjustColDimensions("Sheet1", ws, 1, MaxColumns))
 
+	// Empty cells at the boundary should be removed instead of returning error
+	f2 := NewFile()
+	ws2, err := f2.workSheetReader("Sheet1")
+	assert.NoError(t, err)
+	// Place a non-empty cell within range and an empty cell near MaxColumns
+	assert.NoError(t, f2.SetCellValue("Sheet1", "A1", 100))
+	ws2.prepareSheetXML(MaxColumns, 1)
+	// The cell at MaxColumns is empty (created by prepareSheetXML), inserting
+	// a column should silently remove it rather than returning ErrColumnNumber
+	assert.NoError(t, f2.adjustColDimensions("Sheet1", ws2, 1, 1))
+	// Verify the non-empty cell is still present (shifted from A1 to B1 by offset=1)
+	val, err := f2.GetCellValue("Sheet1", "B1")
+	assert.NoError(t, err)
+	assert.Equal(t, "100", val)
+	// Verify empty cell at MaxColumns was removed
+	for _, c := range ws2.SheetData.Row[0].C {
+		col, _, _ := CellNameToCoordinates(c.R)
+		assert.LessOrEqual(t, col, MaxColumns, "no cell should exceed MaxColumns")
+	}
+
+	// A non-empty cell at the boundary should still return ErrColumnNumber
+	f3 := NewFile()
+	ws3, err := f3.workSheetReader("Sheet1")
+	assert.NoError(t, err)
+	cellName, _ := CoordinatesToCellName(MaxColumns, 1)
+	assert.NoError(t, f3.SetCellValue("Sheet1", cellName, "data"))
+	assert.Equal(t, ErrColumnNumber, f3.adjustColDimensions("Sheet1", ws3, 1, 1))
+
+	// A cell with formula at the boundary should still return ErrColumnNumber
+	f4 := NewFile()
+	ws4, err := f4.workSheetReader("Sheet1")
+	assert.NoError(t, err)
+	assert.NoError(t, f4.SetCellFormula("Sheet1", cellName, "1+1"))
+	assert.Equal(t, ErrColumnNumber, f4.adjustColDimensions("Sheet1", ws4, 1, 1))
+
 	_, err = f.NewSheet("Sheet2")
 	assert.NoError(t, err)
 	f.Sheet.Delete("xl/worksheets/sheet2.xml")

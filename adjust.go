@@ -144,9 +144,17 @@ func (f *File) adjustCols(ws *xlsxWorksheet, col, offset int) error {
 // inserting or deleting rows or columns.
 func (f *File) adjustColDimensions(sheet string, ws *xlsxWorksheet, col, offset int) error {
 	for rowIdx := range ws.SheetData.Row {
-		for _, v := range ws.SheetData.Row[rowIdx].C {
+		for i := len(ws.SheetData.Row[rowIdx].C) - 1; i >= 0; i-- {
+			v := ws.SheetData.Row[rowIdx].C[i]
 			if cellCol, _, _ := CellNameToCoordinates(v.R); col <= cellCol {
 				if newCol := cellCol + offset; newCol > 0 && newCol > MaxColumns {
+					if v.V == "" && (v.F == nil || v.F.Content == "") {
+						ws.SheetData.Row[rowIdx].C = append(
+							ws.SheetData.Row[rowIdx].C[:i],
+							ws.SheetData.Row[rowIdx].C[i+1:]...,
+						)
+						continue
+					}
 					return ErrColumnNumber
 				}
 			}
