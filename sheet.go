@@ -459,6 +459,58 @@ func updateFormulaSheetName(formula, oldName, newName string) string {
 	return formula
 }
 
+// replaceSheetRefWithREF replaces references to the deleted sheet name in a
+// formula with #REF!. It handles both quoted ('SheetName'!) and unquoted
+// (SheetName!) forms.
+func replaceSheetRefWithREF(formula, sheetName string) string {
+	escaped := escapeSheetName(sheetName)
+	if strings.Contains(escaped, "'") {
+		formula = strings.ReplaceAll(formula, escaped+"!", "#REF!")
+	} else {
+		formula = strings.ReplaceAll(formula, escaped+"!", "#REF!")
+		formula = strings.ReplaceAll(formula, "'"+escaped+"'!", "#REF!")
+	}
+	return formula
+}
+
+// invalidateDeletedSheetFormulas updates all formulas across the workbook that
+// reference the deleted sheet, replacing the sheet reference with #REF!.
+// This mirrors Excel's standard behavior when a referenced sheet is deleted.
+func (f *File) invalidateDeletedSheetFormulas(deletedSheet string) {
+	for sheetName := range f.sheetMap {
+		ws, err := f.workSheetReader(sheetName)
+		if err != nil {
+			continue
+		}
+		ws.mu.Lock()
+		for rowIdx := range ws.SheetData.Row {
+			for cellIdx := range ws.SheetData.Row[rowIdx].C {
+				cell := &ws.SheetData.Row[rowIdx].C[cellIdx]
+				if cell.F == nil || cell.F.Content == "" {
+					continue
+				}
+				oldFormula := cell.F.Content
+				cell.F.Content = replaceSheetRefWithREF(cell.F.Content, deletedSheet)
+				if cell.F.Content == oldFormula {
+					continue
+				}
+				if f.OnFormulaAdjusted != nil && cell.R != "" {
+					f.OnFormulaAdjusted(sheetName, cell.R, oldFormula, cell.F.Content)
+				}
+				if formulaNewlyContainsREF(oldFormula, cell.F.Content) {
+					oldValue := cell.V
+					cell.V = formulaErrorREF
+					cell.T = "e"
+					if f.OnCellCalculated != nil && cell.R != "" && oldValue != cell.V {
+						f.OnCellCalculated(sheetName, cell.R, oldValue, cell.V)
+					}
+				}
+			}
+		}
+		ws.mu.Unlock()
+	}
+}
+
 // GetSheetName provides a function to get the sheet name of the workbook by
 // the given sheet index. If the given sheet index is invalid, it will return
 // an empty string.
@@ -644,6 +696,11 @@ func (f *File) DeleteSheet(sheet string) error {
 	activeSheetName := f.GetSheetName(f.GetActiveSheetIndex())
 	deleteLocalSheetID, _ := f.GetSheetIndex(sheet)
 	deleteAndAdjustDefinedNames(wb, deleteLocalSheetID)
+
+	// Rewrite formulas referencing the deleted sheet to #REF!
+	f.mu.Lock()
+	f.invalidateDeletedSheetFormulas(sheet)
+	f.mu.Unlock()
 
 	for idx, v := range wb.Sheets.Sheet {
 		if !strings.EqualFold(v.Name, sheet) {

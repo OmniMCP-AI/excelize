@@ -593,6 +593,82 @@ func TestDeleteSheet(t *testing.T) {
 	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestDeleteSheet2.xlsx")))
 }
 
+func TestDeleteSheetInvalidatesFormulas(t *testing.T) {
+	f := NewFile()
+	defer f.Close()
+	_, err := f.NewSheet("Sheet2")
+	assert.NoError(t, err)
+	_, err = f.NewSheet("Sheet3")
+	assert.NoError(t, err)
+
+	// Set values on Sheet1
+	assert.NoError(t, f.SetCellValue("Sheet1", "A1", 10))
+	assert.NoError(t, f.SetCellValue("Sheet1", "B1", 20))
+
+	// Set formulas on Sheet2 referencing Sheet1
+	assert.NoError(t, f.SetCellFormula("Sheet2", "A1", "Sheet1!A1+Sheet1!B1"))
+	assert.NoError(t, f.SetCellFormula("Sheet2", "A2", "Sheet1!A1+Sheet3!A1"))
+
+	// Set a formula on Sheet3 referencing Sheet2
+	assert.NoError(t, f.SetCellFormula("Sheet3", "A1", "Sheet2!A1"))
+
+	// Delete Sheet1 — formulas referencing it should become #REF!
+	assert.NoError(t, f.DeleteSheet("Sheet1"))
+
+	// Sheet2!A1 referenced only Sheet1, so both refs become #REF!
+	formula, err := f.GetCellFormula("Sheet2", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "#REF!A1+#REF!B1", formula)
+	val, err := f.GetCellValue("Sheet2", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "#REF!", val)
+
+	// Sheet2!A2 had mixed refs: Sheet1 (deleted) and Sheet3 (still exists)
+	formula, err = f.GetCellFormula("Sheet2", "A2")
+	assert.NoError(t, err)
+	assert.Equal(t, "#REF!A1+Sheet3!A1", formula)
+
+	// Sheet3!A1 referenced Sheet2 which was NOT deleted — formula unchanged
+	formula, err = f.GetCellFormula("Sheet3", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "Sheet2!A1", formula)
+
+	// Test with quoted sheet name containing space
+	f2 := NewFile()
+	defer f2.Close()
+	_, err = f2.NewSheet("My Sheet")
+	assert.NoError(t, err)
+	_, err = f2.NewSheet("Sheet2")
+	assert.NoError(t, err)
+	assert.NoError(t, f2.SetCellValue("My Sheet", "A1", 42))
+	assert.NoError(t, f2.SetCellFormula("Sheet2", "A1", "'My Sheet'!A1"))
+	assert.NoError(t, f2.DeleteSheet("My Sheet"))
+	formula, err = f2.GetCellFormula("Sheet2", "A1")
+	assert.NoError(t, err)
+	assert.Equal(t, "#REF!A1", formula)
+
+	// Test callbacks are fired
+	f3 := NewFile()
+	defer f3.Close()
+	_, err = f3.NewSheet("Sheet2")
+	assert.NoError(t, err)
+	assert.NoError(t, f3.SetCellValue("Sheet1", "A1", 5))
+	assert.NoError(t, f3.SetCellFormula("Sheet2", "A1", "Sheet1!A1"))
+	var adjustedFormulas []string
+	var calculatedCells []string
+	f3.OnFormulaAdjusted = func(sheet, cell, oldFormula, newFormula string) {
+		adjustedFormulas = append(adjustedFormulas, sheet+":"+cell+":"+oldFormula+"->"+newFormula)
+	}
+	f3.OnCellCalculated = func(sheet, cell, oldValue, newValue string) {
+		calculatedCells = append(calculatedCells, sheet+":"+cell+":"+oldValue+"->"+newValue)
+	}
+	assert.NoError(t, f3.DeleteSheet("Sheet1"))
+	assert.Len(t, adjustedFormulas, 1)
+	assert.Contains(t, adjustedFormulas[0], "Sheet2:A1:Sheet1!A1->#REF!A1")
+	assert.Len(t, calculatedCells, 1)
+	assert.Contains(t, calculatedCells[0], "Sheet2:A1:")
+}
+
 func TestMoveSheet(t *testing.T) {
 	f := NewFile()
 	defer f.Close()
