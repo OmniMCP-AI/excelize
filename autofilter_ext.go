@@ -116,6 +116,14 @@ func (f *File) GetAutoFilter(sheet string) (*AutoFilterResult, error) {
 				CellColor: fc.ColorFilter.CellColor,
 				DxfID:     fc.ColorFilter.DxfID,
 			}
+			// Also populate ColorFilters (Univer-style) by reading the dxf fill color directly
+			if fc.ColorFilter.CellColor {
+				if color := f.getDxfFillColor(fc.ColorFilter.DxfID); color != "" {
+					col.ColorFilters = &ColorFiltersResult{
+						CellFillColors: []string{color},
+					}
+				}
+			}
 		}
 		result.FilterColumns = append(result.FilterColumns, col)
 	}
@@ -176,6 +184,21 @@ func (f *File) SetAutoFilterFull(sheet, ref string, columns []AutoFilterColumnRe
 				CellColor: col.ColorFilter.CellColor,
 				DxfID:     col.ColorFilter.DxfID,
 			}
+		} else if col.ColorFilters != nil && len(col.ColorFilters.CellFillColors) > 0 {
+			// Convert Univer-style color filter to OOXML dxf entry
+			dxfID, err := f.NewConditionalStyle(&Style{
+				Fill: Fill{
+					Type:    "pattern",
+					Pattern: 1, // solid fill
+					Color:   []string{col.ColorFilters.CellFillColors[0]},
+				},
+			})
+			if err == nil {
+				fc.ColorFilter = &xlsxColorFilter{
+					CellColor: true,
+					DxfID:     dxfID,
+				}
+			}
 		}
 
 		filterColumns = append(filterColumns, fc)
@@ -224,4 +247,38 @@ func (f *File) RemoveAutoFilterFull(sheet string) error {
 		wb.DefinedNames.DefinedName = filtered
 	}
 	return nil
+}
+
+// getDxfFillColor reads the fill color directly from the dxf entry at the
+// given index, bypassing theme color resolution. Returns "#rrggbb" or "".
+func (f *File) getDxfFillColor(dxfID int) string {
+	f.mu.Lock()
+	s, err := f.stylesReader()
+	f.mu.Unlock()
+	if err != nil || s.Dxfs == nil || dxfID < 0 || dxfID >= len(s.Dxfs.Dxfs) {
+		return ""
+	}
+	dxf := s.Dxfs.Dxfs[dxfID]
+	if dxf.Fill == nil || dxf.Fill.PatternFill == nil {
+		return ""
+	}
+	pf := dxf.Fill.PatternFill
+	var rgb string
+	if pf.FgColor != nil && pf.FgColor.RGB != "" {
+		rgb = pf.FgColor.RGB
+	} else if pf.BgColor != nil && pf.BgColor.RGB != "" {
+		rgb = pf.BgColor.RGB
+	}
+	if rgb == "" {
+		return ""
+	}
+	// Strip the "FF" alpha prefix (AARRGGBB → RRGGBB)
+	rgb = strings.ToUpper(rgb)
+	if len(rgb) == 8 {
+		rgb = strings.TrimPrefix(rgb, "FF")
+	}
+	if len(rgb) == 6 {
+		return "#" + strings.ToLower(rgb)
+	}
+	return ""
 }
