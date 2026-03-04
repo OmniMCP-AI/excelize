@@ -497,13 +497,11 @@ func (f *File) invalidateDeletedSheetFormulas(deletedSheet string) {
 				if f.OnFormulaAdjusted != nil && cell.R != "" {
 					f.OnFormulaAdjusted(sheetName, cell.R, oldFormula, cell.F.Content)
 				}
-				if formulaNewlyContainsREF(oldFormula, cell.F.Content) {
-					oldValue := cell.V
-					cell.V = formulaErrorREF
-					cell.T = "e"
-					if f.OnCellCalculated != nil && cell.R != "" && oldValue != cell.V {
-						f.OnCellCalculated(sheetName, cell.R, oldValue, cell.V)
-					}
+				oldValue := cell.V
+				cell.V = formulaErrorREF
+				cell.T = "e"
+				if f.OnCellCalculated != nil && cell.R != "" && oldValue != cell.V {
+					f.OnCellCalculated(sheetName, cell.R, oldValue, cell.V)
 				}
 			}
 		}

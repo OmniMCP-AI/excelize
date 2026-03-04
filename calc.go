@@ -1109,6 +1109,14 @@ func (f *File) evalInfixExp(ctx *calcContext, sheet, cell string, tokens []efp.T
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
 
+		// When a #REF! error token is immediately followed by a Range operand
+		// (e.g., #REF! then A1 from the original #REF!A1), skip the trailing
+		// range token so the pair is treated as a single #REF! error.
+		if token.TSubType == efp.TokenSubTypeError && i+1 < len(tokens) &&
+			tokens[i+1].TSubType == efp.TokenSubTypeRange {
+			i++ // skip the trailing range token (e.g., "A1")
+		}
+
 		// out of function stack
 		if opfStack.Len() == 0 {
 			if err = f.parseToken(ctx, sheet, token, opdStack, optStack); err != nil {
@@ -1975,6 +1983,10 @@ func calculate(opdStack *Stack, opt efp.Token) error {
 			return ErrInvalidFormula
 		}
 		opd := opdStack.Pop().(formulaArg)
+		if opd.Type == ArgError {
+			opdStack.Push(opd)
+			return nil
+		}
 		opdStack.Push(newNumberFormulaArg(0 - opd.ToNumber().Number))
 	}
 	if opt.TValue == "-" && opt.TType == efp.TokenTypeOperatorInfix {
@@ -1983,6 +1995,14 @@ func calculate(opdStack *Stack, opt efp.Token) error {
 		}
 		rOpd := opdStack.Pop().(formulaArg)
 		lOpd := opdStack.Pop().(formulaArg)
+		if lOpd.Type == ArgError {
+			opdStack.Push(lOpd)
+			return nil
+		}
+		if rOpd.Type == ArgError {
+			opdStack.Push(rOpd)
+			return nil
+		}
 		if err := calcSubtract(rOpd, lOpd, opdStack); err != nil {
 			return err
 		}
@@ -2014,14 +2034,14 @@ func calculate(opdStack *Stack, opt efp.Token) error {
 				lOpd = newNumberFormulaArg(0)
 			}
 		}
-		// 方案A: 移除错误转换，让 calc 函数自己处理 ArgError
-		// 这样 ArgError 会被推入 opdStack 而不是转换为 Go error
-		// if rOpd.Type == ArgError {
-		// 	return errors.New(rOpd.Value())
-		// }
-		// if lOpd.Type == ArgError {
-		// 	return errors.New(lOpd.Value())
-		// }
+		if lOpd.Type == ArgError {
+			opdStack.Push(lOpd)
+			return nil
+		}
+		if rOpd.Type == ArgError {
+			opdStack.Push(rOpd)
+			return nil
+		}
 		return fn(rOpd, lOpd, opdStack)
 	}
 	return nil
@@ -2089,7 +2109,7 @@ func isOperatorPrefixToken(token efp.Token) bool {
 
 // isOperand determine if the token is parse operand.
 func isOperand(token efp.Token) bool {
-	return token.TType == efp.TokenTypeOperand && (token.TSubType == efp.TokenSubTypeNumber || token.TSubType == efp.TokenSubTypeText || token.TSubType == efp.TokenSubTypeLogical)
+	return token.TType == efp.TokenTypeOperand && (token.TSubType == efp.TokenSubTypeNumber || token.TSubType == efp.TokenSubTypeText || token.TSubType == efp.TokenSubTypeLogical || token.TSubType == efp.TokenSubTypeError)
 }
 
 // tokenToFormulaArg create a formula argument by given token.
@@ -2100,6 +2120,8 @@ func tokenToFormulaArg(token efp.Token) formulaArg {
 	case efp.TokenSubTypeNumber:
 		num, _ := strconv.ParseFloat(token.TValue, 64)
 		return newNumberFormulaArg(num)
+	case efp.TokenSubTypeError:
+		return newErrorFormulaArg(token.TValue, token.TValue)
 	default:
 		return newStringFormulaArg(token.TValue)
 	}
