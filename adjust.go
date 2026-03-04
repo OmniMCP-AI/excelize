@@ -367,6 +367,19 @@ func adjustFormulaColumnName(name, operand string, abs, keepRelative bool, dir a
 	}
 	col, err := ColumnNameToNumber(name)
 	if err != nil {
+		// Column names in Excel are at most 3 letters (A-XFD). If the name
+		// has more than 3 characters, it cannot be a real column reference
+		// (e.g., "false" misidentified as Range by the efp tokenizer).
+		// Return it unchanged instead of propagating the error.
+		if len(name) > 3 {
+			return "", operand + name, false, nil
+		}
+		if err == ErrColumnNumber {
+			// Valid column name format but exceeds MaxColumns (e.g., "XFE").
+			// This is an already-invalid reference; return #REF! instead of
+			// aborting the entire operation.
+			return "", operand + "#REF!", false, nil
+		}
 		return "", operand, false, err
 	}
 	if col >= num {
@@ -382,6 +395,13 @@ func adjustFormulaColumnName(name, operand string, abs, keepRelative bool, dir a
 			// Reference moved out of bounds, return #REF!
 			// Unless keepRelative is true (defined names should not produce #REF!)
 			if !keepRelative {
+				return "", operand + "#REF!", false, nil
+			}
+		}
+		if col > MaxColumns {
+			if keepRelative {
+				col = MaxColumns
+			} else {
 				return "", operand + "#REF!", false, nil
 			}
 		}
@@ -1380,10 +1400,10 @@ func (f *File) adjustDataValidations(ws *xlsxWorksheet, sheet string, dir adjust
 func (from *xlsxFrom) adjustDrawings(dir adjustDirection, num, offset int, editAs string) (bool, error) {
 	var ok bool
 	if dir == columns && from.Col+1 >= num && from.Col+offset >= 0 {
-		if from.Col+offset >= MaxColumns {
-			return false, ErrColumnNumber
-		}
 		from.Col += offset
+		if from.Col >= MaxColumns {
+			from.Col = MaxColumns - 1
+		}
 		ok = editAs == "oneCell"
 	}
 	if dir == rows && from.Row+1 >= num && from.Row+offset >= 0 {
@@ -1400,10 +1420,10 @@ func (from *xlsxFrom) adjustDrawings(dir adjustDirection, num, offset int, editA
 // and charts object when inserting or deleting rows or columns.
 func (to *xlsxTo) adjustDrawings(dir adjustDirection, num, offset int, ok bool) error {
 	if dir == columns && to.Col+1 >= num && to.Col+offset >= 0 && ok {
-		if to.Col+offset >= MaxColumns {
-			return ErrColumnNumber
-		}
 		to.Col += offset
+		if to.Col >= MaxColumns {
+			to.Col = MaxColumns - 1
+		}
 	}
 	if dir == rows && to.Row+1 >= num && to.Row+offset >= 0 && ok {
 		if to.Row+offset >= TotalRows {

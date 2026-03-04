@@ -5086,11 +5086,13 @@ func TestCalcVLOOKUPEmpty(t *testing.T) {
 		assert.Equal(t, expected, result, formula)
 	}
 	// Lookup using a reference to an empty cell (ArgEmpty)
-	// G1 is empty, so VLOOKUP(G1, ...) should behave same as VLOOKUP("", ...)
-	assert.NoError(t, f.SetCellFormula("Sheet1", "H2", `VLOOKUP(G1,B1:C6,2,FALSE)`))
+	// Excel behavior: empty cell reference is treated as numeric 0, not ""
+	// G1 is empty, so VLOOKUP(G1, A1:C6, ...) looks up 0 in column A.
+	// A column has {ID,1,2,3,nil,5}, no 0 -> #N/A
+	assert.NoError(t, f.SetCellFormula("Sheet1", "H2", `VLOOKUP(G1,A1:C6,2,FALSE)`))
 	result, err := f.CalcCellValue("Sheet1", "H2")
-	assert.NoError(t, err)
-	assert.Equal(t, "200", result)
+	assert.EqualError(t, err, "VLOOKUP no result found")
+	assert.Equal(t, "#N/A", result)
 	// Normal lookups should still work
 	normalCalc := map[string]string{
 		`VLOOKUP("Alice",B1:C6,2,FALSE)`: "100",

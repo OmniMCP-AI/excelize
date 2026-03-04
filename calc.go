@@ -17896,6 +17896,10 @@ func (fn *formulaFuncs) VLOOKUP(argsList *list.List) formulaArg {
 	if errArg.Type == ArgError {
 		return errArg
 	}
+	// Excel behavior: an empty cell reference is treated as numeric 0
+	if lookupValue.Type == ArgEmpty {
+		lookupValue = newNumberFormulaArg(0)
+	}
 	var matchIdx int
 	var wasExact bool
 

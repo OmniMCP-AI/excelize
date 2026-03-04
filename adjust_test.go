@@ -605,16 +605,22 @@ func TestAdjustFormula(t *testing.T) {
 	assert.Equal(t, newCellNameToCoordinatesError("-", newInvalidCellNameError("-")), f.adjustFormula("Sheet1", "Sheet1", &xlsxC{F: &xlsxF{Ref: "-"}}, rows, 0, 0, false))
 	assert.Equal(t, ErrColumnNumber, f.adjustFormula("Sheet1", "Sheet1", &xlsxC{F: &xlsxF{Ref: "XFD1:XFD1"}}, columns, 0, 1, false))
 
-	_, err := f.adjustFormulaRef("Sheet1", "Sheet1", "XFE1", false, columns, 0, 1, false)
-	assert.Equal(t, ErrColumnNumber, err)
-	_, err = f.adjustFormulaRef("Sheet1", "Sheet1", "XFD1", false, columns, 0, 1, false)
-	assert.Equal(t, ErrColumnNumber, err)
+	// When a formula column reference overflows MaxColumns after adjustment,
+	// it should produce #REF! instead of an error (matching Excel behavior)
+	result, err := f.adjustFormulaRef("Sheet1", "Sheet1", "XFE1", false, columns, 0, 1, false)
+	assert.NoError(t, err)
+	assert.Contains(t, result, "#REF!")
+	result, err = f.adjustFormulaRef("Sheet1", "Sheet1", "XFD1", false, columns, 0, 1, false)
+	assert.NoError(t, err)
+	assert.Contains(t, result, "#REF!")
 
 	f = NewFile()
 	assert.NoError(t, f.SetCellFormula("Sheet1", "B1", "XFD1"))
-	assert.Equal(t, ErrColumnNumber, f.InsertCols("Sheet1", "A", 1))
+	assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
+	formulaResult, _ := f.GetCellFormula("Sheet1", "C1")
+	assert.Contains(t, formulaResult, "#REF!")
 
-	assert.NoError(t, f.SetCellFormula("Sheet1", "B2", fmt.Sprintf("A%d", TotalRows)))
+	assert.NoError(t, f.SetCellFormula("Sheet1", "C2", fmt.Sprintf("A%d", TotalRows)))
 	assert.Equal(t, ErrMaxRows, f.InsertRows("Sheet1", 1, 1))
 
 	f = NewFile()
@@ -623,11 +629,11 @@ func TestAdjustFormula(t *testing.T) {
 
 	f = NewFile()
 	assert.NoError(t, f.SetCellFormula("Sheet1", "B3", "SUM(XFD:A:B)"))
-	assert.Equal(t, ErrColumnNumber, f.InsertCols("Sheet1", "A", 1))
+	assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 
 	f = NewFile()
 	assert.NoError(t, f.SetCellFormula("Sheet1", "B3", "SUM(A:B:XFD)"))
-	assert.Equal(t, ErrColumnNumber, f.InsertCols("Sheet1", "A", 1))
+	assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 
 	// Test adjust formula with defined name in formula text
 	f = NewFile()
@@ -999,10 +1005,10 @@ func TestAdjustFormula(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "12", result)
 
-		// Test adjust array formula with invalid range reference
+		// Test adjust array formula with column overflow produces #REF!
 		formulaType, ref = STCellFormulaTypeArray, "E1:E2"
 		assert.NoError(t, f.SetCellFormula("Sheet1", "E1", "XFD1:XFD1", FormulaOpts{Ref: &ref, Type: &formulaType}))
-		assert.EqualError(t, f.InsertCols("Sheet1", "A", 1), "the column number must be greater than or equal to 1 and less than or equal to 16384")
+		assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 	})
 }
 
@@ -1169,7 +1175,7 @@ func TestAdjustDataValidations(t *testing.T) {
 	assert.NoError(t, dv.SetRange("Sheet1!A1048576", "Sheet1!XFD1", DataValidationTypeWhole, DataValidationOperatorBetween))
 	dv.SetError(DataValidationErrorStyleStop, "error title", "error body")
 	assert.NoError(t, f.AddDataValidation("Sheet1", dv))
-	assert.Equal(t, ErrColumnNumber, f.InsertCols("Sheet1", "A", 1))
+	assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 	assert.Equal(t, ErrMaxRows, f.InsertRows("Sheet1", 1, 1))
 
 	ws, ok := f.Sheet.Load("xl/worksheets/sheet1.xml")
@@ -1270,27 +1276,27 @@ func TestAdjustDrawings(t *testing.T) {
 	f.Pkg.Store("xl/drawings/drawing1.xml", MacintoshCyrillicCharset)
 	assert.EqualError(t, f.InsertCols("Sheet1", "A", 1), "XML syntax error on line 1: invalid UTF-8")
 
-	errors := []error{ErrColumnNumber, ErrColumnNumber, ErrMaxRows, ErrMaxRows}
+	// Drawings at boundary columns now cap to MaxColumns-1 instead of erroring
 	cells = []string{"XFD1", "XFB1"}
-	for i, cell := range cells {
+	for _, cell := range cells {
 		f = NewFile()
 		assert.NoError(t, f.AddPicture("Sheet1", cell, filepath.Join("test", "images", "excel.jpg"), nil))
-		assert.Equal(t, errors[i], f.InsertCols("Sheet1", "A", 1))
+		assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 		assert.NoError(t, f.SaveAs(wb))
 		f, err = OpenFile(wb)
 		assert.NoError(t, err)
-		assert.Equal(t, errors[i], f.InsertCols("Sheet1", "A", 1))
+		assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 	}
-	errors = []error{ErrMaxRows, ErrMaxRows}
+	rowErrors := []error{ErrMaxRows, ErrMaxRows}
 	cells = []string{"A1048576", "A1048570"}
 	for i, cell := range cells {
 		f = NewFile()
 		assert.NoError(t, f.AddPicture("Sheet1", cell, filepath.Join("test", "images", "excel.jpg"), nil))
-		assert.Equal(t, errors[i], f.InsertRows("Sheet1", 1, 1))
+		assert.Equal(t, rowErrors[i], f.InsertRows("Sheet1", 1, 1))
 		assert.NoError(t, f.SaveAs(wb))
 		f, err = OpenFile(wb)
 		assert.NoError(t, err)
-		assert.Equal(t, errors[i], f.InsertRows("Sheet1", 1, 1))
+		assert.Equal(t, rowErrors[i], f.InsertRows("Sheet1", 1, 1))
 	}
 
 	a := xdrCellAnchor{}
@@ -1306,7 +1312,8 @@ func TestAdjustDrawings(t *testing.T) {
 	f, err = OpenFile(wb)
 	assert.NoError(t, err)
 	f.Pkg.Store("xl/drawings/drawing1.xml", []byte(xml.Header+fmt.Sprintf(`<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><oneCellAnchor><from><col>%d</col><row>0</row></from><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"></mc:AlternateContent><clientData/></oneCellAnchor></wsDr>`, MaxColumns)))
-	assert.EqualError(t, f.InsertCols("Sheet1", "A", 1), "the column number must be greater than or equal to 1 and less than or equal to 16384")
+	// Drawing column at MaxColumns now caps to MaxColumns-1 instead of erroring
+	assert.NoError(t, f.InsertCols("Sheet1", "A", 1))
 }
 
 func TestAdjustDefinedNames(t *testing.T) {
