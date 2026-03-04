@@ -1317,6 +1317,60 @@ func (f *File) DeleteChart(sheet, cell string) error {
 	return err
 }
 
+// GetChartCells provides a function to get all chart cell references in a
+// worksheet by given worksheet name.
+func (f *File) GetChartCells(sheet string) ([]string, error) {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return nil, err
+	}
+	if ws.Drawing == nil {
+		return nil, nil
+	}
+	target := f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID)
+	drawingXML := strings.TrimPrefix(strings.ReplaceAll(target, "..", "xl"), "/")
+	drawingRelationships := strings.ReplaceAll(
+		strings.ReplaceAll(drawingXML, "xl/drawings", "xl/drawings/_rels"), ".xml", ".xml.rels")
+	return f.getChartCells(drawingXML, drawingRelationships)
+}
+
+// getChartCells returns all cell references that contain charts in the given
+// drawing.
+func (f *File) getChartCells(drawingXML, drawingRelationships string) ([]string, error) {
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return nil, err
+	}
+	var cells []string
+	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
+		for _, anchor := range anchors {
+			if anchor.From == nil || anchor.Pic != nil {
+				continue
+			}
+			chartRID := f.extractChartRID(anchor.GraphicFrame)
+			if chartRID == "" {
+				continue
+			}
+			rel := f.getDrawingRelationships(drawingRelationships, chartRID)
+			if rel == nil {
+				continue
+			}
+			chartPath := filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
+			if _, ok := f.Pkg.Load(chartPath); !ok {
+				continue
+			}
+			cell, err := CoordinatesToCellName(anchor.From.Col+1, anchor.From.Row+1)
+			if err != nil {
+				continue
+			}
+			if inStrSlice(cells, cell, true) == -1 {
+				cells = append(cells, cell)
+			}
+		}
+	}
+	return cells, nil
+}
+
 // GetChart provides a function to get chart configuration in a spreadsheet by
 // given worksheet name and cell reference. The returned []*Chart slice
 // contains the primary chart and any combo charts.

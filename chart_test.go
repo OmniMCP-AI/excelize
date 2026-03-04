@@ -636,6 +636,67 @@ func TestChartWithLogarithmicBase(t *testing.T) {
 	}
 }
 
+func TestGetChartCells(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+	}
+
+	// No chart on the sheet yet
+	cells, err := f.GetChartCells(sheet)
+	assert.NoError(t, err)
+	assert.Empty(t, cells)
+
+	// Add charts
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{Type: Col, Series: series}))
+	assert.NoError(t, f.AddChart(sheet, "M1", &Chart{Type: Line, Series: series}))
+	assert.NoError(t, f.AddChart(sheet, "E16", &Chart{Type: Pie, Series: series}))
+
+	cells, err = f.GetChartCells(sheet)
+	assert.NoError(t, err)
+	assert.Len(t, cells, 3)
+	assert.Contains(t, cells, "E1")
+	assert.Contains(t, cells, "M1")
+	assert.Contains(t, cells, "E16")
+
+	// Verify round-trip: GetChartCells + GetChart
+	for _, cell := range cells {
+		charts, err := f.GetChart(sheet, cell)
+		assert.NoError(t, err)
+		assert.NotNil(t, charts)
+		assert.GreaterOrEqual(t, len(charts), 1)
+	}
+
+	// Error: invalid sheet name
+	_, err = f.GetChartCells("Sheet:1")
+	assert.EqualError(t, err, ErrSheetNameInvalid.Error())
+
+	// Error: non-existent sheet
+	_, err = f.GetChartCells("SheetN")
+	assert.EqualError(t, err, "sheet SheetN does not exist")
+
+	// No drawing on a fresh sheet
+	f2 := NewFile()
+	cells, err = f2.GetChartCells("Sheet1")
+	assert.NoError(t, err)
+	assert.Nil(t, cells)
+	assert.NoError(t, f2.Close())
+
+	assert.NoError(t, f.Close())
+}
+
 func TestGetChart(t *testing.T) {
 	f := NewFile()
 	sheet := f.GetSheetName(0)
