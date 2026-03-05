@@ -1134,6 +1134,64 @@ func TestChartAnchorPoint(t *testing.T) {
 	assert.Equal(t, 152400, charts[0].Format.To.RowOff)
 	assert.NoError(t, f2.Close())
 
+	// Test SetChart updates From/To anchor position (keep From.Col/Row same for lookup)
+	newFrom := &AnchorPoint{Col: 4, ColOff: 19050, Row: 0, RowOff: 9525}
+	newTo := &AnchorPoint{Col: 14, ColOff: 190500, Row: 17, RowOff: 95250}
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Moved Chart"}},
+		Format: GraphicOptions{
+			From: newFrom,
+			To:   newTo,
+		},
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 1)
+	assert.NotNil(t, charts[0].Format.From)
+	assert.NotNil(t, charts[0].Format.To)
+	assert.Equal(t, 4, charts[0].Format.From.Col)
+	assert.Equal(t, 19050, charts[0].Format.From.ColOff)
+	assert.Equal(t, 0, charts[0].Format.From.Row)
+	assert.Equal(t, 9525, charts[0].Format.From.RowOff)
+	assert.Equal(t, 14, charts[0].Format.To.Col)
+	assert.Equal(t, 190500, charts[0].Format.To.ColOff)
+	assert.Equal(t, 17, charts[0].Format.To.Row)
+	assert.Equal(t, 95250, charts[0].Format.To.RowOff)
+
+	// Test SetChart with From/To after save/reopen (file-loaded anchor)
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestChartAnchorPoint.xlsx")))
+	f4, err := OpenFile(filepath.Join("test", "TestChartAnchorPoint.xlsx"))
+	assert.NoError(t, err)
+	reopenFrom := &AnchorPoint{Col: 4, ColOff: 10000, Row: 0, RowOff: 20000}
+	reopenTo := &AnchorPoint{Col: 11, ColOff: 30000, Row: 14, RowOff: 40000}
+	assert.NoError(t, f4.SetChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Reopened Moved Chart"}},
+		Format: GraphicOptions{
+			From: reopenFrom,
+			To:   reopenTo,
+		},
+	}))
+	charts, err = f4.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 1)
+	assert.NotNil(t, charts[0].Format.From)
+	assert.NotNil(t, charts[0].Format.To)
+	assert.Equal(t, 4, charts[0].Format.From.Col)
+	assert.Equal(t, 10000, charts[0].Format.From.ColOff)
+	assert.Equal(t, 0, charts[0].Format.From.Row)
+	assert.Equal(t, 20000, charts[0].Format.From.RowOff)
+	assert.Equal(t, 11, charts[0].Format.To.Col)
+	assert.Equal(t, 30000, charts[0].Format.To.ColOff)
+	assert.Equal(t, 14, charts[0].Format.To.Row)
+	assert.Equal(t, 40000, charts[0].Format.To.RowOff)
+	assert.NoError(t, f4.Close())
+
 	// Test AddChart without From/To still works (backward compatibility)
 	f3 := NewFile()
 	for cell, v := range map[string]interface{}{
@@ -1155,6 +1213,241 @@ func TestChartAnchorPoint(t *testing.T) {
 	assert.NotNil(t, charts[0].Format.From)
 	assert.NotNil(t, charts[0].Format.To)
 	assert.NoError(t, f3.Close())
+
+	// Test RID is populated by GetChart
+	assert.NotEmpty(t, fromPt) // reuse fromPt from above
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.NotEmpty(t, charts[0].RID)
+
+	// Test SetChart with RID-based lookup
+	rid := charts[0].RID
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Bar,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Updated via RID"}},
+		RID:    rid,
+		Format: GraphicOptions{
+			From: &AnchorPoint{Col: 4, ColOff: 11111, Row: 0, RowOff: 22222},
+			To:   &AnchorPoint{Col: 10, ColOff: 33333, Row: 12, RowOff: 44444},
+		},
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Bar, charts[0].Type)
+	assert.Equal(t, 11111, charts[0].Format.From.ColOff)
+	assert.Equal(t, 22222, charts[0].Format.From.RowOff)
+	assert.Equal(t, 33333, charts[0].Format.To.ColOff)
+	assert.Equal(t, 44444, charts[0].Format.To.RowOff)
+	assert.Equal(t, rid, charts[0].RID)
+
+	assert.NoError(t, f.Close())
+}
+
+func TestChartMultipleOnSameCell(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+		{Name: "Sheet1!$A$4", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$4:$D$4"},
+	}
+
+	// Add two charts to the same cell "E1"
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "First Chart"}},
+	}))
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{
+		Type:   Line,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Second Chart"}},
+	}))
+
+	// GetChart should return both charts at E1 (each in its own []*Chart)
+	charts, err := f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 2)
+	// Charts should have different RIDs
+	assert.NotEmpty(t, charts[0].RID)
+	assert.NotEmpty(t, charts[1].RID)
+	assert.NotEqual(t, charts[0].RID, charts[1].RID)
+	// Check types
+	assert.Equal(t, Col, charts[0].Type)
+	assert.Equal(t, Line, charts[1].Type)
+
+	// Test GetCharts returns all charts on the sheet
+	allCharts, err := f.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Len(t, allCharts, 2)
+
+	// Test GetChartByRID returns the correct chart
+	rid1 := charts[0].RID
+	rid2 := charts[1].RID
+	chart1, err := f.GetChartByRID(sheet, rid1)
+	assert.NoError(t, err)
+	assert.NotNil(t, chart1)
+	assert.Equal(t, Col, chart1.Type)
+	assert.Equal(t, rid1, chart1.RID)
+	chart2, err := f.GetChartByRID(sheet, rid2)
+	assert.NoError(t, err)
+	assert.NotNil(t, chart2)
+	assert.Equal(t, Line, chart2.Type)
+	assert.Equal(t, rid2, chart2.RID)
+
+	// Test GetChartByRID with non-existent RID
+	chart, err := f.GetChartByRID(sheet, "rIdNonExistent")
+	assert.NoError(t, err)
+	assert.Nil(t, chart)
+
+	// Test SetChart by RID: update only the second chart
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Bar,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Updated Second Chart"}},
+		RID:    rid2,
+	}))
+	// Verify: first chart unchanged, second chart updated
+	chart1, err = f.GetChartByRID(sheet, rid1)
+	assert.NoError(t, err)
+	assert.Equal(t, Col, chart1.Type)
+	assert.Equal(t, "First Chart", chart1.Title[0].Text)
+	chart2, err = f.GetChartByRID(sheet, rid2)
+	assert.NoError(t, err)
+	assert.Equal(t, Bar, chart2.Type)
+	assert.Equal(t, "Updated Second Chart", chart2.Title[0].Text)
+
+	// Test DeleteChartByRID: delete the first chart
+	assert.NoError(t, f.DeleteChartByRID(sheet, rid1))
+	// First chart should be gone
+	chart1, err = f.GetChartByRID(sheet, rid1)
+	assert.NoError(t, err)
+	assert.Nil(t, chart1)
+	// Second chart should still exist
+	chart2, err = f.GetChartByRID(sheet, rid2)
+	assert.NoError(t, err)
+	assert.NotNil(t, chart2)
+	assert.Equal(t, Bar, chart2.Type)
+	// GetCharts should now show only 1
+	allCharts, err = f.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Len(t, allCharts, 1)
+	// GetChart at E1 should show only 1
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+
+	// Test DeleteChartByRID: delete the remaining chart
+	assert.NoError(t, f.DeleteChartByRID(sheet, rid2))
+	allCharts, err = f.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Nil(t, allCharts)
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Nil(t, charts)
+
+	// Test DeleteChartByRID with non-existent RID (no error)
+	assert.NoError(t, f.DeleteChartByRID(sheet, "rIdNonExistent"))
+
+	// Test error cases
+	// Invalid sheet name
+	assert.EqualError(t, f.DeleteChartByRID("Sheet:1", "rId1"), ErrSheetNameInvalid.Error())
+	_, err = f.GetCharts("Sheet:1")
+	assert.EqualError(t, err, ErrSheetNameInvalid.Error())
+	_, err = f.GetChartByRID("Sheet:1", "rId1")
+	assert.EqualError(t, err, ErrSheetNameInvalid.Error())
+	// Non-existent sheet
+	assert.EqualError(t, f.DeleteChartByRID("SheetN", "rId1"), "sheet SheetN does not exist")
+	_, err = f.GetCharts("SheetN")
+	assert.EqualError(t, err, "sheet SheetN does not exist")
+	_, err = f.GetChartByRID("SheetN", "rId1")
+	assert.EqualError(t, err, "sheet SheetN does not exist")
+	// No drawing on sheet
+	f2 := NewFile()
+	assert.NoError(t, f2.DeleteChartByRID("Sheet1", "rId1"))
+	charts2, err := f2.GetCharts("Sheet1")
+	assert.NoError(t, err)
+	assert.Nil(t, charts2)
+	chart, err = f2.GetChartByRID("Sheet1", "rId1")
+	assert.NoError(t, err)
+	assert.Nil(t, chart)
+	assert.NoError(t, f2.Close())
+
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestChartMultipleOnSameCell.xlsx")))
+	assert.NoError(t, f.Close())
+}
+
+func TestGetCharts(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+	}
+
+	// No charts initially
+	charts, err := f.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Nil(t, charts)
+
+	// Add charts at different cells
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Chart at E1"}},
+	}))
+	assert.NoError(t, f.AddChart(sheet, "M1", &Chart{
+		Type:   Line,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Chart at M1"}},
+	}))
+	assert.NoError(t, f.AddChart(sheet, "E16", &Chart{
+		Type:   Pie,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Chart at E16"}},
+	}))
+
+	// GetCharts returns all 3 charts
+	charts, err = f.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Len(t, charts, 3)
+	// All should have non-empty RIDs
+	for _, c := range charts {
+		assert.NotEmpty(t, c.RID)
+	}
+
+	// Verify persistence after save/reopen
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestGetCharts.xlsx")))
+	f2, err := OpenFile(filepath.Join("test", "TestGetCharts.xlsx"))
+	assert.NoError(t, err)
+	charts, err = f2.GetCharts(sheet)
+	assert.NoError(t, err)
+	assert.Len(t, charts, 3)
+	assert.NoError(t, f2.Close())
 
 	assert.NoError(t, f.Close())
 }

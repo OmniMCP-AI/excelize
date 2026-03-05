@@ -669,6 +669,7 @@ type Chart struct {
 	HoleSize     int
 	GapWidth     *uint
 	Overlap      *int
+	RID          string
 	order        int
 }
 

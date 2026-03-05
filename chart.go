@@ -1240,15 +1240,15 @@ func (f *File) SetChart(sheet, cell string, chart *Chart, combo ...*Chart) error
 		return err
 	}
 	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
-	chartPath, err := f.locateChartPath(wsDr, drawingRelPath, col, row)
-	if err != nil {
-		return err
-	}
+	anchor, chartPath := f.locateChartAnchor(wsDr, drawingRelPath, col, row, opts.RID)
 	if chartPath == "" {
 		return f.AddChart(sheet, cell, chart, combo...)
 	}
 	chartXML := f.buildChartSpace(opts, comboCharts)
 	f.saveFileList(chartPath, chartXML)
+	if opts.Format.From != nil && opts.Format.To != nil && anchor != nil {
+		f.updateAnchorPosition(anchor, opts.Format.From, opts.Format.To)
+	}
 	return nil
 }
 
@@ -1356,6 +1356,60 @@ func (f *File) DeleteChart(sheet, cell string) error {
 	return err
 }
 
+// DeleteChartByRID provides a function to delete a chart in spreadsheet by
+// given worksheet name and relationship ID. The relationship ID can be obtained
+// from the RID field of a [Chart] returned by [File.GetChart],
+// [File.GetCharts] or [File.GetChartByRID].
+func (f *File) DeleteChartByRID(sheet, rId string) error {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	if ws.Drawing == nil {
+		return nil
+	}
+	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return err
+	}
+	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
+
+	// Find and remove the anchor with the matching RID
+	if f.deleteChartAnchorByRID(wsDr, drawingRelPath, rId) {
+		f.Drawings.Store(drawingXML, wsDr)
+	}
+	return nil
+}
+
+// deleteChartAnchorByRID removes a chart anchor from the drawing by its
+// relationship ID. It also deletes the associated chart XML file and drawing
+// relationship. Returns true if an anchor was removed.
+func (f *File) deleteChartAnchorByRID(wsDr *xlsxWsDr, drawingRelPath, rId string) bool {
+	removeFromSlice := func(anchors []*xdrCellAnchor) ([]*xdrCellAnchor, bool) {
+		for idx := 0; idx < len(anchors); idx++ {
+			chartRID := f.extractChartRID(anchors[idx].GraphicFrame)
+			if chartRID != rId {
+				continue
+			}
+			rel := f.getDrawingRelationships(drawingRelPath, chartRID)
+			if rel != nil {
+				chartPath := filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
+				f.Pkg.Delete(chartPath)
+				f.deleteDrawingRels(drawingRelPath, chartRID)
+			}
+			return append(anchors[:idx], anchors[idx+1:]...), true
+		}
+		return anchors, false
+	}
+	var removed bool
+	wsDr.TwoCellAnchor, removed = removeFromSlice(wsDr.TwoCellAnchor)
+	if !removed {
+		wsDr.OneCellAnchor, removed = removeFromSlice(wsDr.OneCellAnchor)
+	}
+	return removed
+}
+
 // GetChartCells provides a function to get all chart cell references in a
 // worksheet by given worksheet name.
 func (f *File) GetChartCells(sheet string) ([]string, error) {
@@ -1437,68 +1491,167 @@ func (f *File) GetChart(sheet, cell string) ([]*Chart, error) {
 	return f.getChartFromDrawing(wsDr, drawingRelPath, col, row)
 }
 
+// GetCharts provides a function to get all charts in a worksheet by given
+// worksheet name. The returned []*Chart slice contains all charts with their
+// RID, anchor positions, and chart configuration populated.
+func (f *File) GetCharts(sheet string) ([]*Chart, error) {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return nil, err
+	}
+	if ws.Drawing == nil {
+		return nil, nil
+	}
+	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return nil, err
+	}
+	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
+	var allCharts []*Chart
+	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
+		for _, anchor := range anchors {
+			if anchor.Pic != nil {
+				continue
+			}
+			charts, err := f.extractChartFromAnchor(anchor, drawingRelPath)
+			if err != nil {
+				return nil, err
+			}
+			allCharts = append(allCharts, charts...)
+		}
+	}
+	if len(allCharts) == 0 {
+		return nil, nil
+	}
+	return allCharts, nil
+}
+
+// GetChartByRID provides a function to get chart configuration in a
+// spreadsheet by given worksheet name and relationship ID. The relationship ID
+// can be obtained from the RID field of a [Chart] returned by [File.GetChart]
+// or [File.GetCharts].
+func (f *File) GetChartByRID(sheet, rId string) (*Chart, error) {
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return nil, err
+	}
+	if ws.Drawing == nil {
+		return nil, nil
+	}
+	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return nil, err
+	}
+	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
+	anchor, _ := f.locateChartAnchor(wsDr, drawingRelPath, 0, 0, rId)
+	if anchor == nil {
+		return nil, nil
+	}
+	charts, err := f.extractChartFromAnchor(anchor, drawingRelPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(charts) == 0 {
+		return nil, nil
+	}
+	return charts[0], nil
+}
+
 // getChartFromDrawing extracts chart configuration from drawing anchors at the
-// specified cell position.
+// specified cell position. It collects charts from all matching anchors at the
+// given position, supporting multiple charts on the same cell.
 func (f *File) getChartFromDrawing(wsDr *xlsxWsDr, drawingRelPath string, col, row int) ([]*Chart, error) {
+	var allCharts []*Chart
 	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
 		for _, anchor := range anchors {
 			fromCol, fromRow, ok := f.getAnchorChartFrom(anchor)
 			if !ok || fromCol != col || fromRow != row {
 				continue
 			}
+			charts, err := f.extractChartFromAnchor(anchor, drawingRelPath)
+			if err != nil {
+				return nil, err
+			}
+			allCharts = append(allCharts, charts...)
+		}
+	}
+	if len(allCharts) == 0 {
+		return nil, nil
+	}
+	return allCharts, nil
+}
+
+// extractChartFromAnchor parses a single chart anchor and returns the chart
+// configuration with RID and anchor points populated.
+func (f *File) extractChartFromAnchor(anchor *xdrCellAnchor, drawingRelPath string) ([]*Chart, error) {
+	chartRID := f.extractChartRID(anchor.GraphicFrame)
+	if chartRID == "" {
+		return nil, nil
+	}
+	rel := f.getDrawingRelationships(drawingRelPath, chartRID)
+	if rel == nil {
+		return nil, nil
+	}
+	chartPath := filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
+	chartSpaceBytes := f.readXML(chartPath)
+	if len(chartSpaceBytes) == 0 {
+		return nil, nil
+	}
+	normalizedBytes := namespaceStrictToTransitional(chartSpaceBytes)
+	var chartSpace xlsxChartSpace
+	if err := f.xmlNewDecoder(bytes.NewReader(normalizedBytes)).
+		Decode(&chartSpace); err != nil && err != io.EOF {
+		return nil, err
+	}
+	charts := f.extractCharts(&chartSpace, normalizedBytes)
+	fromPt, toPt := f.getAnchorPoints(anchor)
+	for _, c := range charts {
+		c.Format.From = fromPt
+		c.Format.To = toPt
+		c.RID = chartRID
+	}
+	return charts, nil
+}
+
+// locateChartAnchor finds a chart anchor in the drawing by matching either the
+// given rId (if non-empty) or the cell position (col, row). Returns the
+// matched anchor and the chart XML path. Returns nil anchor and empty path if
+// no chart is found.
+func (f *File) locateChartAnchor(wsDr *xlsxWsDr, drawingRelPath string, col, row int, rId string) (*xdrCellAnchor, string) {
+	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
+		for _, anchor := range anchors {
 			chartRID := f.extractChartRID(anchor.GraphicFrame)
 			if chartRID == "" {
 				continue
+			}
+			if rId != "" {
+				if chartRID != rId {
+					continue
+				}
+			} else {
+				fromCol, fromRow, ok := f.getAnchorChartFrom(anchor)
+				if !ok || fromCol != col || fromRow != row {
+					continue
+				}
 			}
 			rel := f.getDrawingRelationships(drawingRelPath, chartRID)
 			if rel == nil {
 				continue
 			}
-			chartPath := filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
-			chartSpaceBytes := f.readXML(chartPath)
-			if len(chartSpaceBytes) == 0 {
-				continue
-			}
-			normalizedBytes := namespaceStrictToTransitional(chartSpaceBytes)
-			var chartSpace xlsxChartSpace
-			if err := f.xmlNewDecoder(bytes.NewReader(normalizedBytes)).
-				Decode(&chartSpace); err != nil && err != io.EOF {
-				return nil, err
-			}
-			charts := f.extractCharts(&chartSpace, normalizedBytes)
-			fromPt, toPt := f.getAnchorPoints(anchor)
-			for _, c := range charts {
-				c.Format.From = fromPt
-				c.Format.To = toPt
-			}
-			return charts, nil
+			return anchor, filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target)))
 		}
 	}
-	return nil, nil
+	return nil, ""
 }
 
 // locateChartPath returns the chart XML path (e.g., "xl/charts/chart1.xml")
 // for the chart at the specified cell position. Returns empty string if no
 // chart is found at the position.
 func (f *File) locateChartPath(wsDr *xlsxWsDr, drawingRelPath string, col, row int) (string, error) {
-	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
-		for _, anchor := range anchors {
-			fromCol, fromRow, ok := f.getAnchorChartFrom(anchor)
-			if !ok || fromCol != col || fromRow != row {
-				continue
-			}
-			chartRID := f.extractChartRID(anchor.GraphicFrame)
-			if chartRID == "" {
-				continue
-			}
-			rel := f.getDrawingRelationships(drawingRelPath, chartRID)
-			if rel == nil {
-				continue
-			}
-			return filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target))), nil
-		}
-	}
-	return "", nil
+	_, chartPath := f.locateChartAnchor(wsDr, drawingRelPath, col, row, "")
+	return chartPath, nil
 }
 
 // getAnchorChartFrom returns the 0-indexed column and row of a chart anchor's
@@ -1551,6 +1704,30 @@ func (f *File) getAnchorPoints(anchor *xdrCellAnchor) (from, to *AnchorPoint) {
 		to = &AnchorPoint{Col: deCellAnchor.To.Col, ColOff: deCellAnchor.To.ColOff, Row: deCellAnchor.To.Row, RowOff: deCellAnchor.To.RowOff}
 	}
 	return
+}
+
+// updateAnchorPosition updates the From/To anchor position of a given cell
+// anchor. It handles both in-memory anchors (where From/To are set directly)
+// and anchors loaded from file (where From/To are stored in the innerxml).
+func (f *File) updateAnchorPosition(anchor *xdrCellAnchor, from, to *AnchorPoint) {
+	newFrom := &xlsxFrom{Col: from.Col, ColOff: from.ColOff, Row: from.Row, RowOff: from.RowOff}
+	newTo := &xlsxTo{Col: to.Col, ColOff: to.ColOff, Row: to.Row, RowOff: to.RowOff}
+	if anchor.From != nil {
+		anchor.From = newFrom
+		anchor.To = newTo
+	}
+	if anchor.GraphicFrame != "" {
+		deCellAnchorPos := decodeCellAnchorPos{}
+		_ = f.xmlNewDecoder(strings.NewReader("<decodeCellAnchorPos>" + anchor.GraphicFrame + "</decodeCellAnchorPos>")).Decode(&deCellAnchorPos)
+		xlsxAnchorPos := xlsxCellAnchorPos(deCellAnchorPos)
+		for i := 0; i < len(xlsxAnchorPos.AlternateContent); i++ {
+			xlsxAnchorPos.AlternateContent[i].XMLNSMC = SourceRelationshipCompatibility.Value
+		}
+		xlsxAnchorPos.From = newFrom
+		xlsxAnchorPos.To = newTo
+		cellAnchor, _ := xml.Marshal(xlsxAnchorPos)
+		anchor.GraphicFrame = strings.TrimSuffix(strings.TrimPrefix(string(cellAnchor), "<xlsxCellAnchorPos>"), "</xlsxCellAnchorPos>")
+	}
 }
 
 // extractChartRID extracts the chart relationship ID from the graphic frame
