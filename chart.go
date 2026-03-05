@@ -1344,7 +1344,8 @@ func (f *File) getChartCells(drawingXML, drawingRelationships string) ([]string,
 	var cells []string
 	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
 		for _, anchor := range anchors {
-			if anchor.From == nil || anchor.Pic != nil {
+			col, row, ok := f.getAnchorChartFrom(anchor)
+			if !ok {
 				continue
 			}
 			chartRID := f.extractChartRID(anchor.GraphicFrame)
@@ -1359,7 +1360,7 @@ func (f *File) getChartCells(drawingXML, drawingRelationships string) ([]string,
 			if _, ok := f.Pkg.Load(chartPath); !ok {
 				continue
 			}
-			cell, err := CoordinatesToCellName(anchor.From.Col+1, anchor.From.Row+1)
+			cell, err := CoordinatesToCellName(col+1, row+1)
 			if err != nil {
 				continue
 			}
@@ -1402,10 +1403,8 @@ func (f *File) GetChart(sheet, cell string) ([]*Chart, error) {
 func (f *File) getChartFromDrawing(wsDr *xlsxWsDr, drawingRelPath string, col, row int) ([]*Chart, error) {
 	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
 		for _, anchor := range anchors {
-			if anchor.From == nil || anchor.From.Col != col || anchor.From.Row != row {
-				continue
-			}
-			if anchor.Pic != nil {
+			fromCol, fromRow, ok := f.getAnchorChartFrom(anchor)
+			if !ok || fromCol != col || fromRow != row {
 				continue
 			}
 			chartRID := f.extractChartRID(anchor.GraphicFrame)
@@ -1431,6 +1430,30 @@ func (f *File) getChartFromDrawing(wsDr *xlsxWsDr, drawingRelPath string, col, r
 		}
 	}
 	return nil, nil
+}
+
+// getAnchorChartFrom returns the 0-indexed column and row of a chart anchor's
+// From position. It handles both newly created anchors (where From is set
+// directly) and anchors loaded from file (where From must be parsed from the
+// GraphicFrame innerxml). Returns false if the anchor is not a chart.
+func (f *File) getAnchorChartFrom(anchor *xdrCellAnchor) (col, row int, ok bool) {
+	if anchor.Pic != nil {
+		return 0, 0, false
+	}
+	if anchor.From != nil {
+		return anchor.From.Col, anchor.From.Row, true
+	}
+	// For anchors loaded from file, From/To are stored inside GraphicFrame
+	// (which is actually the full innerxml of the anchor element).
+	deCellAnchor := new(decodeCellAnchor)
+	if err := f.xmlNewDecoder(strings.NewReader("<decodeCellAnchor>" + anchor.GraphicFrame + "</decodeCellAnchor>")).
+		Decode(deCellAnchor); err != nil {
+		return 0, 0, false
+	}
+	if deCellAnchor.From == nil || deCellAnchor.Pic != nil {
+		return 0, 0, false
+	}
+	return deCellAnchor.From.Col, deCellAnchor.From.Row, true
 }
 
 // extractChartRID extracts the chart relationship ID from the graphic frame
