@@ -1213,6 +1213,45 @@ func (f *File) AddChart(sheet, cell string, chart *Chart, combo ...*Chart) error
 	return err
 }
 
+// SetChart provides a function to update an existing chart in a spreadsheet
+// by given worksheet name, cell reference and chart configuration. If the cell
+// has no existing chart, it behaves like AddChart.
+func (f *File) SetChart(sheet, cell string, chart *Chart, combo ...*Chart) error {
+	col, row, err := CellNameToCoordinates(cell)
+	if err != nil {
+		return err
+	}
+	col--
+	row--
+	opts, comboCharts, err := f.getChartOptions(chart, combo)
+	if err != nil {
+		return err
+	}
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	if ws.Drawing == nil {
+		return f.AddChart(sheet, cell, chart, combo...)
+	}
+	drawingXML := strings.ReplaceAll(f.getSheetRelationshipsTargetByID(sheet, ws.Drawing.RID), "..", "xl")
+	wsDr, _, err := f.drawingParser(drawingXML)
+	if err != nil {
+		return err
+	}
+	drawingRelPath := strings.ReplaceAll(strings.TrimSuffix(drawingXML, filepath.Base(drawingXML)), "xl/drawings/", "xl/drawings/_rels/") + strings.TrimSuffix(filepath.Base(drawingXML), ".xml") + ".xml.rels"
+	chartPath, err := f.locateChartPath(wsDr, drawingRelPath, col, row)
+	if err != nil {
+		return err
+	}
+	if chartPath == "" {
+		return f.AddChart(sheet, cell, chart, combo...)
+	}
+	chartXML := f.buildChartSpace(opts, comboCharts)
+	f.saveFileList(chartPath, chartXML)
+	return nil
+}
+
 // AddChartSheet provides the method to create a chartsheet by given chart
 // format set (such as offset, scale, aspect ratio setting and print settings)
 // and properties set. In Excel a chartsheet is a worksheet that only contains
@@ -1426,10 +1465,40 @@ func (f *File) getChartFromDrawing(wsDr *xlsxWsDr, drawingRelPath string, col, r
 				Decode(&chartSpace); err != nil && err != io.EOF {
 				return nil, err
 			}
-			return f.extractCharts(&chartSpace, normalizedBytes), nil
+			charts := f.extractCharts(&chartSpace, normalizedBytes)
+			fromPt, toPt := f.getAnchorPoints(anchor)
+			for _, c := range charts {
+				c.Format.From = fromPt
+				c.Format.To = toPt
+			}
+			return charts, nil
 		}
 	}
 	return nil, nil
+}
+
+// locateChartPath returns the chart XML path (e.g., "xl/charts/chart1.xml")
+// for the chart at the specified cell position. Returns empty string if no
+// chart is found at the position.
+func (f *File) locateChartPath(wsDr *xlsxWsDr, drawingRelPath string, col, row int) (string, error) {
+	for _, anchors := range [][]*xdrCellAnchor{wsDr.TwoCellAnchor, wsDr.OneCellAnchor} {
+		for _, anchor := range anchors {
+			fromCol, fromRow, ok := f.getAnchorChartFrom(anchor)
+			if !ok || fromCol != col || fromRow != row {
+				continue
+			}
+			chartRID := f.extractChartRID(anchor.GraphicFrame)
+			if chartRID == "" {
+				continue
+			}
+			rel := f.getDrawingRelationships(drawingRelPath, chartRID)
+			if rel == nil {
+				continue
+			}
+			return filepath.ToSlash(filepath.Join("xl/charts", filepath.Base(rel.Target))), nil
+		}
+	}
+	return "", nil
 }
 
 // getAnchorChartFrom returns the 0-indexed column and row of a chart anchor's
@@ -1454,6 +1523,34 @@ func (f *File) getAnchorChartFrom(anchor *xdrCellAnchor) (col, row int, ok bool)
 		return 0, 0, false
 	}
 	return deCellAnchor.From.Col, deCellAnchor.From.Row, true
+}
+
+// getAnchorPoints extracts From and To anchor points from a cell anchor. It
+// handles both newly created anchors (where From/To are set directly) and
+// anchors loaded from file (where they must be parsed from the innerxml).
+func (f *File) getAnchorPoints(anchor *xdrCellAnchor) (from, to *AnchorPoint) {
+	if anchor.From != nil {
+		from = &AnchorPoint{Col: anchor.From.Col, ColOff: anchor.From.ColOff, Row: anchor.From.Row, RowOff: anchor.From.RowOff}
+	}
+	if anchor.To != nil {
+		to = &AnchorPoint{Col: anchor.To.Col, ColOff: anchor.To.ColOff, Row: anchor.To.Row, RowOff: anchor.To.RowOff}
+	}
+	if from != nil && to != nil {
+		return
+	}
+	// For anchors loaded from file, parse From/To from the GraphicFrame innerxml
+	deCellAnchor := new(decodeCellAnchor)
+	if err := f.xmlNewDecoder(strings.NewReader("<decodeCellAnchor>" + anchor.GraphicFrame + "</decodeCellAnchor>")).
+		Decode(deCellAnchor); err != nil {
+		return
+	}
+	if from == nil && deCellAnchor.From != nil {
+		from = &AnchorPoint{Col: deCellAnchor.From.Col, ColOff: deCellAnchor.From.ColOff, Row: deCellAnchor.From.Row, RowOff: deCellAnchor.From.RowOff}
+	}
+	if to == nil && deCellAnchor.To != nil {
+		to = &AnchorPoint{Col: deCellAnchor.To.Col, ColOff: deCellAnchor.To.ColOff, Row: deCellAnchor.To.Row, RowOff: deCellAnchor.To.RowOff}
+	}
+	return
 }
 
 // extractChartRID extracts the chart relationship ID from the graphic frame

@@ -357,36 +357,42 @@ func (f *File) addDrawingPicture(sheet, drawingXML, cell, ext string, rID, hyper
 	if opts.Positioning != "" && inStrSlice(supportedPositioning, opts.Positioning, true) == -1 {
 		return newInvalidOptionalValue("Positioning", opts.Positioning, supportedPositioning)
 	}
-	width, height := img.Width, img.Height
-	if opts.AutoFit {
-		if width, height, col, row, err = f.drawingResize(sheet, cell, float64(width), float64(height), opts); err != nil {
-			return err
-		}
-	} else {
-		width = int(float64(width) * opts.ScaleX)
-		height = int(float64(height) * opts.ScaleY)
-	}
-	colStart, rowStart, colEnd, rowEnd, x1, y1, x2, y2 := f.positionObjectPixels(sheet, col, row, width, height, opts)
 	content, cNvPrID, err := f.drawingParser(drawingXML)
 	if err != nil {
 		return err
 	}
 	cellAnchor := xdrCellAnchor{}
-	from := xlsxFrom{}
-	from.Col = colStart
-	from.ColOff = x1 * EMU
-	from.Row = rowStart
-	from.RowOff = y1 * EMU
-	cellAnchor.From = &from
 
-	if opts.Positioning != "oneCell" {
-		to := xlsxTo{}
-		to.Col = colEnd
-		to.ColOff = x2 * EMU
-		to.Row = rowEnd
-		to.RowOff = y2 * EMU
-		cellAnchor.To = &to
-		cellAnchor.EditAs = opts.Positioning
+	if opts.From != nil && opts.To != nil {
+		cellAnchor.From = &xlsxFrom{Col: opts.From.Col, ColOff: opts.From.ColOff, Row: opts.From.Row, RowOff: opts.From.RowOff}
+		if opts.Positioning != "oneCell" {
+			cellAnchor.To = &xlsxTo{Col: opts.To.Col, ColOff: opts.To.ColOff, Row: opts.To.Row, RowOff: opts.To.RowOff}
+			cellAnchor.EditAs = opts.Positioning
+		}
+	} else {
+		width, height := img.Width, img.Height
+		if opts.AutoFit {
+			if width, height, col, row, err = f.drawingResize(sheet, cell, float64(width), float64(height), opts); err != nil {
+				return err
+			}
+		} else {
+			width = int(float64(width) * opts.ScaleX)
+			height = int(float64(height) * opts.ScaleY)
+		}
+		colStart, rowStart, colEnd, rowEnd, x1, y1, x2, y2 := f.positionObjectPixels(sheet, col, row, width, height, opts)
+		from := xlsxFrom{Col: colStart, ColOff: x1 * EMU, Row: rowStart, RowOff: y1 * EMU}
+		cellAnchor.From = &from
+		if opts.Positioning != "oneCell" {
+			to := xlsxTo{Col: colEnd, ColOff: x2 * EMU, Row: rowEnd, RowOff: y2 * EMU}
+			cellAnchor.To = &to
+			cellAnchor.EditAs = opts.Positioning
+		}
+		if opts.Positioning == "oneCell" {
+			cx := x2 * EMU
+			cy := y2 * EMU
+			cellAnchor.Ext = &xlsxPositiveSize2D{Cx: cx, Cy: cy}
+			// set later on pic.SpPr.Xfrm after pic is created
+		}
 	}
 
 	pic := xlsxPic{}
@@ -417,15 +423,9 @@ func (f *File) addDrawingPicture(sheet, drawingXML, cell, ext string, rID, hyper
 	}
 	pic.SpPr.PrstGeom.Prst = "rect"
 
-	if opts.Positioning == "oneCell" {
-		cx := x2 * EMU
-		cy := y2 * EMU
-		cellAnchor.Ext = &xlsxPositiveSize2D{
-			Cx: cx,
-			Cy: cy,
-		}
-		pic.SpPr.Xfrm.Ext.Cx = cx
-		pic.SpPr.Xfrm.Ext.Cy = cy
+	if cellAnchor.Ext != nil {
+		pic.SpPr.Xfrm.Ext.Cx = cellAnchor.Ext.Cx
+		pic.SpPr.Xfrm.Ext.Cy = cellAnchor.Ext.Cy
 	}
 
 	cellAnchor.Pic = &pic

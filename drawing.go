@@ -54,10 +54,9 @@ func (f *File) prepareChartSheetDrawing(cs *xlsxChartsheet, drawingID int, sheet
 	}
 }
 
-// addChart provides a function to create chart as xl/charts/chart%d.xml by
-// given format sets.
-func (f *File) addChart(opts *Chart, comboCharts []*Chart) {
-	count := f.countCharts()
+// buildChartSpace provides a function to build chart XML content as []byte by
+// given format sets without saving to file.
+func (f *File) buildChartSpace(opts *Chart, comboCharts []*Chart) []byte {
 	xlsxChartSpace := xlsxChartSpace{
 		XMLNSa:         NameSpaceDrawingML.Value,
 		Date1904:       &attrValBool{Val: boolPtr(false)},
@@ -192,6 +191,14 @@ func (f *File) addChart(opts *Chart, comboCharts []*Chart) {
 		xlsxChartSpace.Chart.PlotArea.CatAx = nil
 	}
 	chart, _ := xml.Marshal(xlsxChartSpace)
+	return chart
+}
+
+// addChart provides a function to create chart as xl/charts/chart%d.xml by
+// given format sets.
+func (f *File) addChart(opts *Chart, comboCharts []*Chart) {
+	count := f.countCharts()
+	chart := f.buildChartSpace(opts, comboCharts)
 	media := "xl/charts/chart" + strconv.Itoa(count+1) + ".xml"
 	f.saveFileList(media, chart)
 }
@@ -1493,25 +1500,24 @@ func (f *File) addDrawingChart(sheet, drawingXML, cell string, width, height, rI
 	if err != nil {
 		return err
 	}
-	width = int(float64(width) * opts.ScaleX)
-	height = int(float64(height) * opts.ScaleY)
-	colStart, rowStart, colEnd, rowEnd, x1, y1, x2, y2 := f.positionObjectPixels(sheet, col, row, width, height, opts)
 	content, cNvPrID, err := f.drawingParser(drawingXML)
 	if err != nil {
 		return err
 	}
 	twoCellAnchor := xdrCellAnchor{}
 	twoCellAnchor.EditAs = opts.Positioning
-	from := xlsxFrom{}
-	from.Col = colStart
-	from.ColOff = x1 * EMU
-	from.Row = rowStart
-	from.RowOff = y1 * EMU
-	to := xlsxTo{}
-	to.Col = colEnd
-	to.ColOff = x2 * EMU
-	to.Row = rowEnd
-	to.RowOff = y2 * EMU
+	var from xlsxFrom
+	var to xlsxTo
+	if opts.From != nil && opts.To != nil {
+		from = xlsxFrom{Col: opts.From.Col, ColOff: opts.From.ColOff, Row: opts.From.Row, RowOff: opts.From.RowOff}
+		to = xlsxTo{Col: opts.To.Col, ColOff: opts.To.ColOff, Row: opts.To.Row, RowOff: opts.To.RowOff}
+	} else {
+		width = int(float64(width) * opts.ScaleX)
+		height = int(float64(height) * opts.ScaleY)
+		colStart, rowStart, colEnd, rowEnd, x1, y1, x2, y2 := f.positionObjectPixels(sheet, col, row, width, height, opts)
+		from = xlsxFrom{Col: colStart, ColOff: x1 * EMU, Row: rowStart, RowOff: y1 * EMU}
+		to = xlsxTo{Col: colEnd, ColOff: x2 * EMU, Row: rowEnd, RowOff: y2 * EMU}
+	}
 	twoCellAnchor.From = &from
 	twoCellAnchor.To = &to
 

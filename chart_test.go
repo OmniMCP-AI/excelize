@@ -924,3 +924,237 @@ func TestGetChart(t *testing.T) {
 	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestGetChart.xlsx")))
 	assert.NoError(t, f.Close())
 }
+
+func TestSetChart(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+		{Name: "Sheet1!$A$4", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$4:$D$4"},
+	}
+
+	// Add a Col chart
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Original Chart"}},
+	}))
+	charts, err := f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Col, charts[0].Type)
+	assert.Equal(t, "Original Chart", charts[0].Title[0].Text)
+
+	// SetChart: change type to Line and update title
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Line,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Updated Chart"}},
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Line, charts[0].Type)
+	assert.Equal(t, "Updated Chart", charts[0].Title[0].Text)
+	assert.Len(t, charts[0].Series, 3)
+
+	// SetChart: update series data
+	newSeries := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+	}
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Pie,
+		Series: newSeries,
+		Title:  []RichTextRun{{Text: "Pie Chart"}},
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Pie, charts[0].Type)
+	assert.Len(t, charts[0].Series, 1)
+
+	// SetChart: replace single chart with combo chart
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series[:2],
+		Title:  []RichTextRun{{Text: "Combo Chart"}},
+	}, &Chart{
+		Type:   Line,
+		Series: series[2:],
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 2)
+	assert.Equal(t, Col, charts[0].Type)
+	assert.Equal(t, Line, charts[1].Type)
+	assert.Equal(t, "Combo Chart", charts[0].Title[0].Text)
+
+	// SetChart: on cell with no chart falls back to AddChart
+	assert.NoError(t, f.SetChart(sheet, "M1", &Chart{
+		Type:   Bar,
+		Series: series,
+		Title:  []RichTextRun{{Text: "New Bar Chart"}},
+	}))
+	charts, err = f.GetChart(sheet, "M1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Bar, charts[0].Type)
+
+	// SetChart: on sheet with no drawings falls back to AddChart
+	_, err = f.NewSheet("Sheet2")
+	assert.NoError(t, err)
+	assert.NoError(t, f.SetChart("Sheet2", "A1", &Chart{
+		Type:   Doughnut,
+		Series: series,
+	}))
+	charts, err = f.GetChart("Sheet2", "A1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Doughnut, charts[0].Type)
+
+	// SetChart: update plot area options
+	assert.NoError(t, f.SetChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		PlotArea: ChartPlotArea{
+			ShowVal:     true,
+			ShowCatName: true,
+		},
+		Legend: ChartLegend{Position: "top"},
+	}))
+	charts, err = f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.True(t, charts[0].PlotArea.ShowVal)
+	assert.True(t, charts[0].PlotArea.ShowCatName)
+	assert.Equal(t, "top", charts[0].Legend.Position)
+
+	// Save, reopen, verify persistence
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestSetChart.xlsx")))
+
+	f2, err := OpenFile(filepath.Join("test", "TestSetChart.xlsx"))
+	assert.NoError(t, err)
+	charts, err = f2.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Col, charts[0].Type)
+	assert.True(t, charts[0].PlotArea.ShowVal)
+	assert.NoError(t, f2.Close())
+
+	// Error: invalid sheet name
+	assert.EqualError(t, f.SetChart("Sheet:1", "A1", &Chart{Type: Col, Series: series}), ErrSheetNameInvalid.Error())
+	// Error: invalid cell reference
+	assert.EqualError(t, f.SetChart(sheet, "", &Chart{Type: Col, Series: series}), newCellNameToCoordinatesError("", newInvalidCellNameError("")).Error())
+	// Error: non-existent sheet
+	assert.EqualError(t, f.SetChart("SheetN", "A1", &Chart{Type: Col, Series: series}), "sheet SheetN does not exist")
+	// Error: nil chart options
+	assert.EqualError(t, f.SetChart(sheet, "E1", nil), ErrParameterInvalid.Error())
+
+	assert.NoError(t, f.Close())
+}
+
+func TestChartAnchorPoint(t *testing.T) {
+	f := NewFile()
+	sheet := f.GetSheetName(0)
+
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+		"A3": "Normal", "B3": 5, "C3": 2, "D3": 4,
+		"A4": "Large", "B4": 6, "C4": 7, "D4": 8,
+	} {
+		assert.NoError(t, f.SetCellValue(sheet, cell, v))
+	}
+
+	series := []ChartSeries{
+		{Name: "Sheet1!$A$2", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$2:$D$2"},
+		{Name: "Sheet1!$A$3", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$3:$D$3"},
+		{Name: "Sheet1!$A$4", Categories: "Sheet1!$B$1:$D$1", Values: "Sheet1!$B$4:$D$4"},
+	}
+
+	fromPt := &AnchorPoint{Col: 4, ColOff: 95250, Row: 0, RowOff: 47625}
+	toPt := &AnchorPoint{Col: 12, ColOff: 304800, Row: 15, RowOff: 152400}
+
+	// Test AddChart with explicit From/To anchor points
+	assert.NoError(t, f.AddChart(sheet, "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "Anchor Test"}},
+		Format: GraphicOptions{
+			From: fromPt,
+			To:   toPt,
+		},
+	}))
+
+	// Test GetChart returns correct From/To
+	charts, err := f.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 1)
+	assert.Equal(t, Col, charts[0].Type)
+	assert.NotNil(t, charts[0].Format.From)
+	assert.NotNil(t, charts[0].Format.To)
+	assert.Equal(t, 4, charts[0].Format.From.Col)
+	assert.Equal(t, 95250, charts[0].Format.From.ColOff)
+	assert.Equal(t, 0, charts[0].Format.From.Row)
+	assert.Equal(t, 47625, charts[0].Format.From.RowOff)
+	assert.Equal(t, 12, charts[0].Format.To.Col)
+	assert.Equal(t, 304800, charts[0].Format.To.ColOff)
+	assert.Equal(t, 15, charts[0].Format.To.Row)
+	assert.Equal(t, 152400, charts[0].Format.To.RowOff)
+
+	// Test persistence: save and reopen
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestChartAnchorPoint.xlsx")))
+
+	f2, err := OpenFile(filepath.Join("test", "TestChartAnchorPoint.xlsx"))
+	assert.NoError(t, err)
+	charts, err = f2.GetChart(sheet, "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 1)
+	assert.NotNil(t, charts[0].Format.From)
+	assert.NotNil(t, charts[0].Format.To)
+	assert.Equal(t, 4, charts[0].Format.From.Col)
+	assert.Equal(t, 95250, charts[0].Format.From.ColOff)
+	assert.Equal(t, 0, charts[0].Format.From.Row)
+	assert.Equal(t, 47625, charts[0].Format.From.RowOff)
+	assert.Equal(t, 12, charts[0].Format.To.Col)
+	assert.Equal(t, 304800, charts[0].Format.To.ColOff)
+	assert.Equal(t, 15, charts[0].Format.To.Row)
+	assert.Equal(t, 152400, charts[0].Format.To.RowOff)
+	assert.NoError(t, f2.Close())
+
+	// Test AddChart without From/To still works (backward compatibility)
+	f3 := NewFile()
+	for cell, v := range map[string]interface{}{
+		"A1": nil, "B1": "Apple", "C1": "Orange", "D1": "Pear",
+		"A2": "Small", "B2": 2, "C2": 3, "D2": 3,
+	} {
+		assert.NoError(t, f3.SetCellValue(f3.GetSheetName(0), cell, v))
+	}
+	assert.NoError(t, f3.AddChart(f3.GetSheetName(0), "E1", &Chart{
+		Type:   Col,
+		Series: series,
+		Title:  []RichTextRun{{Text: "No Anchor"}},
+	}))
+	charts, err = f3.GetChart(f3.GetSheetName(0), "E1")
+	assert.NoError(t, err)
+	assert.NotNil(t, charts)
+	assert.Len(t, charts, 1)
+	// From/To should still be populated from auto-calculated positions
+	assert.NotNil(t, charts[0].Format.From)
+	assert.NotNil(t, charts[0].Format.To)
+	assert.NoError(t, f3.Close())
+
+	assert.NoError(t, f.Close())
+}

@@ -430,6 +430,16 @@ type Picture struct {
 	InsertType PictureInsertType
 }
 
+// AnchorPoint represents a cell anchor point with column/row index and offset
+// in EMU (English Metric Units). This is used for precise positioning of
+// drawing objects (charts, pictures) within a worksheet.
+type AnchorPoint struct {
+	Col    int // 0-indexed column number
+	ColOff int // offset within cell in EMU (1 pixel ≈ 9525 EMU)
+	Row    int // 0-indexed row number
+	RowOff int // offset within cell in EMU
+}
+
 // GraphicOptions directly maps the format settings of the picture.
 type GraphicOptions struct {
 	AltText             string
@@ -445,6 +455,8 @@ type GraphicOptions struct {
 	Hyperlink           string
 	HyperlinkType       string
 	Positioning         string
+	From                *AnchorPoint
+	To                  *AnchorPoint
 }
 
 // Shape directly maps the format settings of the shape.
